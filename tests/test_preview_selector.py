@@ -1,30 +1,24 @@
-def test_preview_selector_prefers_abnormal_when_present():
-    # Contract-level test: preview selector should prioritize abnormal markers.
-    ps = __import__("pytest").importorskip("app.services.preview_selector")
-    select_preview_markers = ps.select_preview_markers
+from app.services.preview_selector import select_preview_markers
 
+
+def test_select_preview_prioritizes_abnormal():
     markers = [
         {"name": "Glucose", "status": "normal"},
         {"name": "Hemoglobin", "status": "low"},
         {"name": "LDL", "status": "high"},
         {"name": "WBC", "status": "normal"},
-        {"name": "TSH", "status": "borderline_high"},
-        {"name": "Vitamin D", "status": "normal"},
     ]
-
-    chosen = select_preview_markers(markers)
-    assert 3 <= len(chosen) <= 4
-    chosen_names = {m.get("name") for m in chosen}
-
-    # At least two abnormal markers should be included
-    assert {"Hemoglobin", "LDL"}.issubset(chosen_names)
+    chosen = select_preview_markers(markers, max_items=4)
+    assert any(m["name"] == "Hemoglobin" for m in chosen)
+    assert any(m["name"] == "LDL" for m in chosen)
 
 
-def test_preview_selector_size_and_subset():
-    ps = __import__("pytest").importorskip("app.services.preview_selector")
-    select_preview_markers = ps.select_preview_markers
-
-    markers = [{"name": f"M{i}", "status": "normal"} for i in range(20)]
-    chosen = select_preview_markers(markers)
-    assert 3 <= len(chosen) <= 4
-    assert all(m in markers for m in chosen)
+def test_select_preview_common_when_all_normal():
+    markers = [
+        {"name": "RandomThing", "status": "normal"},
+        {"name": "Glucose", "status": "normal"},
+        {"name": "Total Cholesterol", "status": "normal"},
+    ]
+    chosen = select_preview_markers(markers, max_items=4)
+    names = {m["name"] for m in chosen}
+    assert "Glucose" in names

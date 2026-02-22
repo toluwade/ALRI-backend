@@ -1,42 +1,28 @@
-# ALRI Backend API (alri-api)
+# ALRI API (alri-api)
 
-FastAPI backend for ALRI (Automated Lab Result Interpreter).
+FastAPI backend for **ALRI (Automated Lab Result Interpreter)**.
 
-## Local development
-
-1. Copy env file:
+## Quickstart (Docker)
 
 ```bash
 cp .env.example .env
-```
-
-2. Start services:
-
-```bash
 docker compose up --build
 ```
 
-API will be available at `http://localhost:8000`.
+API:
+- `GET http://localhost:8000/api/v1/health`
 
-## Services
+## Local dev
 
-- API: FastAPI + Uvicorn
-- Worker: Celery worker for async scan processing
-- DB: Postgres
-- Cache/queue: Redis
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+```
 
-## Key endpoints
+## Migrations
 
-- `GET /api/v1/health`
-- `POST /api/v1/scan/upload`
-- `GET /api/v1/scan/{id}/preview` (no auth)
-- `GET /api/v1/scan/{id}/full` (auth + 1 credit)
-- `GET /api/v1/user/credits`
-- `POST /api/v1/user/profile`
-- `GET /api/v1/user/scans`
-- `GET/POST /api/v1/webhook/whatsapp`
-
-## Notes
-
-- Full scan access deducts 1 credit on first access per scan; subsequent views are free.
-- AI results are informational only and not medical advice.
+```bash
+alembic upgrade head
+```
