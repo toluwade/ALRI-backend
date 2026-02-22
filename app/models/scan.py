@@ -29,6 +29,6 @@ class Scan(Base):
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    user = relationship("User", back_populates="scans")
-    markers = relationship("Marker", back_populates="scan", cascade="all, delete-orphan")
-    interpretation = relationship("Interpretation", back_populates="scan", uselist=False, cascade="all, delete-orphan")
+    user = relationship("User", back_populates="scans", lazy="selectin")
+    markers = relationship("Marker", back_populates="scan", cascade="all, delete-orphan", lazy="selectin")
+    interpretation = relationship("Interpretation", back_populates="scan", uselist=False, cascade="all, delete-orphan", lazy="selectin")

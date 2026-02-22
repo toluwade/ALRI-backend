@@ -27,9 +27,9 @@ class User(Base):
     credits: Mapped[int] = mapped_column(Integer, default=5)
 
     referred_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
-    referrer = relationship("User", remote_side=[id])
+    referrer = relationship("User", remote_side=[id], lazy="selectin")
 
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    scans = relationship("Scan", back_populates="user")
+    scans = relationship("Scan", back_populates="user", lazy="selectin")

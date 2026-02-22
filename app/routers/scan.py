@@ -13,7 +13,7 @@ from app.middleware.rate_limit import rate_limit
 from app.models import Interpretation, Marker, Scan, User
 from app.schemas.scan import ManualScanRequest, PreviewResponse, StatusResponse, UploadResponse
 from app.schemas.marker import MarkerOut
-from app.tasks.scan_tasks import process_manual, process_upload
+from app.services.scan_pipeline import run_upload_pipeline, run_manual_pipeline
 from app.utils.storage import save_upload
 
 router = APIRouter(prefix="/scan", tags=["scan"])
@@ -39,8 +39,14 @@ async def upload_scan(
     await db.commit()
     await db.refresh(scan)
 
-    process_upload.delay(str(scan.id), path, mime)
-    return UploadResponse(scan_id=str(scan.id), status="processing")
+    # Run pipeline inline (Celery/Redis not available in dev)
+    try:
+        await run_upload_pipeline(db=db, scan_id=scan.id, file_path=path, mime_type=mime)
+    except Exception as e:
+        scan.status = "failed"
+        scan.raw_ocr_text = f"PIPELINE_ERROR: {e}"
+        await db.commit()
+    return UploadResponse(scan_id=str(scan.id), status=scan.status or "processing")
 
 
 @router.post("/manual", response_model=UploadResponse, dependencies=[Depends(rate_limit)])
@@ -56,9 +62,13 @@ async def manual_scan(
     await db.refresh(scan)
 
     manual_markers = [{"name": m.marker, "value": m.value, "unit": m.unit} for m in payload.markers]
-    process_manual.delay(str(scan.id), manual_markers)
-
-    return UploadResponse(scan_id=str(scan.id), status="processing")
+    try:
+        await run_manual_pipeline(db=db, scan_id=scan.id, manual_markers=manual_markers)
+    except Exception as e:
+        scan.status = "failed"
+        scan.raw_ocr_text = f"PIPELINE_ERROR: {e}"
+        await db.commit()
+    return UploadResponse(scan_id=str(scan.id), status=scan.status or "processing")
 
 
 @router.get("/{scan_id}/status", response_model=StatusResponse, dependencies=[Depends(rate_limit)])

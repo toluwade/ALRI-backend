@@ -3,7 +3,8 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import DateTime, ForeignKey, Text, func
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy import JSON
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
@@ -16,7 +17,7 @@ class Interpretation(Base):
     scan_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("scans.id", ondelete="CASCADE"), unique=True, index=True)
 
     summary: Mapped[str | None] = mapped_column(Text)
-    correlations: Mapped[dict | list | None] = mapped_column(JSONB)
+    correlations: Mapped[dict | list | None] = mapped_column(JSON)
     report_url: Mapped[str | None] = mapped_column(Text)
 
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
