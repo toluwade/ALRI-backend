@@ -24,7 +24,8 @@ class User(Base):
     age: Mapped[int | None] = mapped_column(Integer)
     sex: Mapped[str | None] = mapped_column(String(10))  # male | female
 
-    credits: Mapped[int] = mapped_column(Integer, default=5)
+    # Monetary balance stored in kobo (₦1 = 100 kobo)
+    credits: Mapped[int] = mapped_column(Integer, default=500_000)
 
     referred_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     referrer = relationship("User", remote_side=[id], lazy="selectin")

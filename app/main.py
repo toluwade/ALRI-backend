@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import Base, engine
-from app.routers import auth, health, scan, user
+from app.routers import auth, health, scan, user, webhook, chat
 
 
 async def lifespan(app: FastAPI):
@@ -38,6 +38,8 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api/v1")
     app.include_router(scan.router, prefix="/api/v1")
     app.include_router(user.router, prefix="/api/v1")
+    app.include_router(webhook.router)
+    app.include_router(chat.router, prefix="/api/v1")
 
     return app
 

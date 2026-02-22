@@ -9,6 +9,15 @@ from app.config import settings
 from app.data.reference_ranges import REFERENCE_RANGES
 
 
+CHAT_SYSTEM_PROMPT = """You are ALRI's health assistant. The user is asking about their lab results.
+You have their full report context below. Answer in plain, simple language.
+- Never diagnose. Use "may suggest" or "could indicate"
+- Always recommend consulting a healthcare provider for medical decisions
+- Be helpful, reassuring, and clear
+- Keep answers concise (2-4 sentences unless they ask for detail)
+"""
+
+
 SYSTEM_PROMPT = """You are ALRI, an Automated Lab Result Interpreter. Your job is to analyze
 lab test results and explain them in plain, simple language that anyone
 can understand.
@@ -228,3 +237,55 @@ class KimiProvider:
 
         content = data["choices"][0]["message"]["content"]
         return _extract_json(content)
+
+    async def chat(self, *, messages: list[dict], scan_context: str) -> str:
+        """Chat about a scan report.
+
+        Args:
+            messages: OpenAI-style messages (role/content), excluding system prompt.
+            scan_context: Full report context to ground the assistant.
+        """
+
+        base_url = settings.NVIDIA_NIM_BASE_URL or self.BASE_URL
+        model = settings.KIMI_MODEL or self.MODEL
+
+        if not settings.NVIDIA_NIM_API_KEY:
+            return (
+                "I can help explain your results, but the AI service isn't configured right now. "
+                "Please consult a healthcare provider for medical decisions."
+            )
+
+        # Prepend context as a user-visible instruction so the model always sees it.
+        grounded_messages = [
+            {"role": "system", "content": CHAT_SYSTEM_PROMPT},
+            {
+                "role": "user",
+                "content": f"Report context:\n{scan_context}",
+            },
+        ]
+
+        # Append conversation history (user/assistant turns)
+        for m in messages:
+            role = m.get("role")
+            if role not in {"user", "assistant"}:
+                continue
+            grounded_messages.append({"role": role, "content": str(m.get("content") or "")})
+
+        payload = {
+            "model": model,
+            "messages": grounded_messages,
+            "temperature": 0.2,
+        }
+
+        headers = {"Authorization": f"Bearer {settings.NVIDIA_NIM_API_KEY}"}
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{base_url.rstrip('/')}/chat/completions",
+                json=payload,
+                headers=headers,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+        return (data["choices"][0]["message"]["content"] or "").strip()

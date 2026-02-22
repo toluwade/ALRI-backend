@@ -4,4 +4,6 @@ from pydantic import BaseModel
 
 
 class CreditsResponse(BaseModel):
-    credits: int
+    balance_kobo: int
+    balance_naira: float
+    cost_per_scan_naira: int = 500

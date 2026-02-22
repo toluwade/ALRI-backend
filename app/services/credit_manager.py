@@ -9,12 +9,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import CreditTransaction, Scan, User
 
 
-# Credit rules (spec defaults)
-INITIAL_CREDITS = 5
-REFERRAL_BONUS = 2
-SHARE_BONUS = 1
-MONTHLY_REFRESH = 3
-COST_PER_FULL_SCAN = 1
+# Balance rules (stored in kobo)
+INITIAL_BALANCE_KOBO = 500_000  # ₦5,000 signup bonus
+COST_PER_FULL_SCAN_KOBO = 50_000  # ₦500 per scan unlock
 
 
 class CreditManager:
@@ -49,17 +46,17 @@ class CreditManager:
         if scan.user_id != user.id:
             raise HTTPException(status_code=403, detail="Scan does not belong to current user")
 
-        if user.credits < COST_PER_FULL_SCAN:
-            raise HTTPException(status_code=402, detail="Insufficient credits")
+        if user.credits < COST_PER_FULL_SCAN_KOBO:
+            raise HTTPException(status_code=402, detail="Insufficient balance")
 
-        user.credits -= COST_PER_FULL_SCAN
+        user.credits -= COST_PER_FULL_SCAN_KOBO
         scan.credit_deducted = True
         scan.full_unlocked = True
 
         self.db.add(
             CreditTransaction(
                 user_id=user.id,
-                amount=-COST_PER_FULL_SCAN,
+                amount=-COST_PER_FULL_SCAN_KOBO,
                 reason="scan_used",
                 scan_id=scan.id,
             )

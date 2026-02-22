@@ -3,6 +3,7 @@ from app.models.scan import Scan
 from app.models.marker import Marker
 from app.models.interpretation import Interpretation
 from app.models.credit import CreditTransaction
+from app.models.chat import ChatMessage
 
 __all__ = [
     "User",
@@ -10,4 +11,5 @@ __all__ = [
     "Marker",
     "Interpretation",
     "CreditTransaction",
+    "ChatMessage",
 ]
