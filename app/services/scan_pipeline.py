@@ -101,16 +101,37 @@ async def run_upload_pipeline(*, db: AsyncSession, scan_id: uuid.UUID, file_path
             content = f.read()
 
         # OCR: Tesseract (PaddleOCR requires x86, this server is ARM64)
-        text = await TesseractOCR().extract_text(file_bytes=content, filename=file_path, mime_type=mime_type)
+        text = ""
+        try:
+            text = await TesseractOCR().extract_text(file_bytes=content, filename=file_path, mime_type=mime_type)
+        except Exception as e:
+            text = f"OCR_ERROR: {e}"
 
         scan.raw_ocr_text = text
 
         extracted = parse_markers_from_text(text)
         profile = await _get_profile(db, scan)
-        enriched = _enrich_with_reference(extracted, profile)
-
         llm = get_llm_provider()
-        interpreted = await llm.interpret(enriched, profile)
+
+        # If OCR extracted few/no markers, send image directly to LLM (vision)
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.warning(f"OCR extracted {len(extracted)} markers from scan {scan.id}")
+        
+        if len(extracted) < 2 and hasattr(llm, "interpret_image"):
+            logger.warning(f"Using VISION MODE for scan {scan.id}")
+            try:
+                interpreted = await llm.interpret_image(content, mime_type, profile)
+                scan.raw_ocr_text = (text or "") + "\n\n[VISION MODE: OCR extracted <2 markers, sent image to LLM directly]"
+            except Exception as vision_err:
+                logger.error(f"Vision failed for scan {scan.id}: {vision_err}")
+                # Fall back to text-based interpretation
+                enriched = _enrich_with_reference(extracted, profile)
+                interpreted = await llm.interpret(enriched, profile)
+                scan.raw_ocr_text = (text or "") + f"\n\n[VISION FAILED: {vision_err}, fell back to text]"
+        else:
+            enriched = _enrich_with_reference(extracted, profile)
+            interpreted = await llm.interpret(enriched, profile)
         await _store_interpretation(db=db, scan=scan, interpreted=interpreted)
 
         scan.status = "completed"
