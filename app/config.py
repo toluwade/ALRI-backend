@@ -17,7 +17,9 @@ class Settings(BaseSettings):
     JWT_ALG: str = "HS256"
     JWT_EXPIRES_MINUTES: int = 60 * 24 * 30  # 30 days
 
-    GOOGLE_CLIENT_ID: str | None = None
+    CLERK_SECRET_KEY: str | None = None
+    CLERK_PUBLISHABLE_KEY: str | None = None
+    CLERK_WEBHOOK_SECRET: str | None = None
 
     # LLM
     LLM_PROVIDER: str = "kimi"  # kimi | claude
@@ -25,8 +27,17 @@ class Settings(BaseSettings):
     NVIDIA_NIM_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
     KIMI_MODEL: str = "moonshotai/kimi-k2-instruct"
 
-    # OCR
-    GOOGLE_VISION_API_KEY: str | None = None
+    # OCR — PaddleOCR runs locally, no API key needed
+
+    # Email (Resend)
+    RESEND_API_KEY: str | None = None
+    RESEND_FROM_HELLO: str = "hello@alri.health"
+    RESEND_FROM_BILLING: str = "billing@alri.health"
+
+    # Payments (Paystack)
+    PAYSTACK_SECRET_KEY: str | None = None
+    PAYSTACK_PUBLIC_KEY: str | None = None
+    PAYSTACK_WEBHOOK_SECRET: str | None = None
 
     # WhatsApp
     WHATSAPP_TOKEN: str | None = None

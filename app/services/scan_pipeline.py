@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.data.reference_ranges import get_reference_range
 from app.models import Interpretation, Marker, Scan, User
 from app.services.llm.factory import get_llm_provider
-from app.services.ocr.google_vision import GoogleVisionOCR
+from app.services.ocr.paddle_ocr import PaddleOCRProvider
 from app.services.ocr.tesseract import TesseractOCR
 from app.services.preview_selector import select_preview_markers
 
@@ -101,10 +101,10 @@ async def run_upload_pipeline(*, db: AsyncSession, scan_id: uuid.UUID, file_path
         with open(file_path, "rb") as f:
             content = f.read()
 
-        # OCR: Google first, then Tesseract fallback.
+        # OCR: PaddleOCR (local, free) with Tesseract fallback
         text = ""
         try:
-            text = await GoogleVisionOCR().extract_text(content=content, mime_type=mime_type)
+            text = await PaddleOCRProvider().extract_text(content, file_path)
         except Exception:
             text = await TesseractOCR().extract_text(content=content, mime_type=mime_type)
 

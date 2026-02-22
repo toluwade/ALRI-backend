@@ -3,8 +3,8 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 
-class GoogleAuthRequest(BaseModel):
-    id_token: str = Field(..., description="Google ID token from client")
+class ClerkAuthRequest(BaseModel):
+    session_token: str = Field(..., description="Clerk session token from client")
 
 
 class TokenResponse(BaseModel):

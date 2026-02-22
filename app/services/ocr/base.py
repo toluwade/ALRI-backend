@@ -4,5 +4,5 @@ from typing import Protocol
 
 
 class BaseOCRProvider(Protocol):
-    async def extract_text(self, *, content: bytes, mime_type: str) -> str:
+    async def extract_text(self, file_bytes: bytes, filename: str) -> str:
         raise NotImplementedError
