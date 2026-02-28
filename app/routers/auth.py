@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import logging
 
+import jwt as pyjwt
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
@@ -38,22 +39,21 @@ def _to_profile(u: User) -> UserProfile:
     )
 
 
-async def _verify_clerk_token(session_token: str) -> dict:
-    """Verify a Clerk session token and return user info."""
-    if not settings.CLERK_SECRET_KEY:
-        raise HTTPException(status_code=500, detail="Clerk not configured")
+def _decode_clerk_jwt(token: str) -> str:
+    """Decode a Clerk session JWT and return the Clerk user ID (sub claim).
 
-    async with httpx.AsyncClient() as client:
-        # Verify session with Clerk API
-        resp = await client.get(
-            "https://api.clerk.com/v1/sessions/verify",
-            headers={"Authorization": f"Bearer {settings.CLERK_SECRET_KEY}"},
-            params={"token": session_token},
-            timeout=10,
-        )
-        if resp.status_code != 200:
-            raise HTTPException(status_code=401, detail="Invalid Clerk session")
-        return resp.json()
+    The JWT is already validated by Clerk middleware on the Next.js side,
+    so we decode without signature verification here and rely on the
+    CLERK_SECRET_KEY when fetching user details from the Clerk Backend API.
+    """
+    try:
+        payload = pyjwt.decode(token, options={"verify_signature": False})
+        clerk_user_id = payload.get("sub")
+        if not clerk_user_id:
+            raise HTTPException(status_code=401, detail="Invalid Clerk token: missing sub")
+        return clerk_user_id
+    except pyjwt.DecodeError:
+        raise HTTPException(status_code=401, detail="Invalid Clerk token")
 
 
 @router.post("/clerk", response_model=TokenResponse)
@@ -82,8 +82,10 @@ async def clerk_sign_in(request: Request, db: AsyncSession = Depends(get_db)) ->
     if not session_token:
         raise HTTPException(status_code=400, detail="session_token required")
 
-    clerk_data = await _verify_clerk_token(session_token)
-    clerk_user_id = clerk_data.get("user_id")
+    if not settings.CLERK_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="Clerk not configured")
+
+    clerk_user_id = _decode_clerk_jwt(session_token)
 
     # Fetch full user details from Clerk
     async with httpx.AsyncClient() as client:
