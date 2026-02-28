@@ -62,9 +62,23 @@ async def clerk_sign_in(request: Request, db: AsyncSession = Depends(get_db)) ->
 
     Frontend authenticates via Clerk (Google, Apple, phone, etc.),
     then sends the Clerk session token here to get an ALRI API token.
+    Accepts token via Authorization Bearer header or JSON body.
     """
-    body = await request.json()
-    session_token = body.get("session_token")
+    session_token: str | None = None
+
+    # Try Authorization header first (preferred)
+    auth_header = request.headers.get("Authorization", "")
+    if auth_header.startswith("Bearer "):
+        session_token = auth_header.removeprefix("Bearer ").strip()
+
+    # Fallback to JSON body
+    if not session_token:
+        try:
+            body = await request.json()
+            session_token = body.get("session_token")
+        except Exception:
+            pass
+
     if not session_token:
         raise HTTPException(status_code=400, detail="session_token required")
 
