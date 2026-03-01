@@ -36,6 +36,12 @@ def upgrade() -> None:
         ")"
     )
 
+    # -- users: add referred_by --
+    op.add_column(
+        "users",
+        sa.Column("referred_by", postgresql.UUID(as_uuid=True), sa.ForeignKey("users.id"), nullable=True),
+    )
+
     # -- skin_analyses --
     op.create_table(
         "skin_analyses",
@@ -68,4 +74,5 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.drop_table("voice_transcriptions")
     op.drop_table("skin_analyses")
+    op.drop_column("users", "referred_by")
     op.drop_column("users", "has_topped_up")
