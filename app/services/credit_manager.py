@@ -6,23 +6,31 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.config import settings
 from app.models import CreditTransaction, Scan, User
-
-
-# Balance rules (stored in kobo)
-INITIAL_BALANCE_KOBO = 500_000  # ₦5,000 signup bonus
-COST_PER_FULL_SCAN_KOBO = 50_000  # ₦500 per scan unlock
 
 
 class CreditManager:
     """Manages credit balance and credit transaction records.
 
-    Rule: /scan/{id}/full costs 1 credit on *first access per scan*.
-    Subsequent views are free (scan.credit_deducted == True).
+    Pricing (kobo):
+      - Scan unlock:         ₦200  (20 000 kobo)
+      - Chat message:        ₦50   ( 5 000 kobo)
+      - Skin analysis:       ₦250  (25 000 kobo)  — paid users only
+      - Voice transcription:  ₦100  (10 000 kobo)  — paid users only
     """
 
     def __init__(self, db: AsyncSession):
         self.db = db
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def is_paid_user(user: User) -> bool:
+        """True if user has ever topped up real money via Paystack."""
+        return bool(user.has_topped_up)
 
     async def get_balance(self, user_id: uuid.UUID) -> int:
         res = await self.db.execute(select(User.credits).where(User.id == user_id))
@@ -31,32 +39,31 @@ class CreditManager:
             raise HTTPException(status_code=404, detail="User not found")
         return int(credits)
 
-    async def require_and_deduct_for_full_scan(self, *, user: User, scan: Scan) -> None:
-        """Enforces credit payment for full scan access.
+    # ------------------------------------------------------------------
+    # Scan unlock  (₦200 — everyone)
+    # ------------------------------------------------------------------
 
-        - If scan.credit_deducted already True -> no charge.
-        - Else charge COST_PER_FULL_SCAN, fail if insufficient credits.
-        - Records CreditTransaction with reason='scan_used'.
-        """
+    async def require_and_deduct_for_full_scan(self, *, user: User, scan: Scan) -> None:
+        """First-access charge for a full scan.  Idempotent via scan.credit_deducted."""
 
         if scan.credit_deducted:
             return
 
-        # Ensure scan belongs to user (avoid charging user for someone else's scan)
         if scan.user_id != user.id:
             raise HTTPException(status_code=403, detail="Scan does not belong to current user")
 
-        if user.credits < COST_PER_FULL_SCAN_KOBO:
+        cost = settings.PRICE_SCAN_UNLOCK_KOBO
+        if user.credits < cost:
             raise HTTPException(status_code=402, detail="Insufficient balance")
 
-        user.credits -= COST_PER_FULL_SCAN_KOBO
+        user.credits -= cost
         scan.credit_deducted = True
         scan.full_unlocked = True
 
         self.db.add(
             CreditTransaction(
                 user_id=user.id,
-                amount=-COST_PER_FULL_SCAN_KOBO,
+                amount=-cost,
                 reason="scan_used",
                 scan_id=scan.id,
             )
@@ -66,6 +73,84 @@ class CreditManager:
         await self.db.refresh(user)
         await self.db.refresh(scan)
 
+    # ------------------------------------------------------------------
+    # Chat message  (₦50 — everyone)
+    # ------------------------------------------------------------------
+
+    async def deduct_for_chat(self, *, user: User, scan_id: uuid.UUID) -> None:
+        cost = settings.PRICE_CHAT_MESSAGE_KOBO
+        if user.credits < cost:
+            raise HTTPException(status_code=402, detail="Insufficient balance for chat message")
+
+        user.credits -= cost
+        self.db.add(
+            CreditTransaction(
+                user_id=user.id,
+                amount=-cost,
+                reason="chat_used",
+                scan_id=scan_id,
+            )
+        )
+        await self.db.commit()
+        await self.db.refresh(user)
+
+    # ------------------------------------------------------------------
+    # Skin analysis  (₦250 — paid users only)
+    # ------------------------------------------------------------------
+
+    async def deduct_for_skin_analysis(self, *, user: User) -> None:
+        if not self.is_paid_user(user):
+            raise HTTPException(
+                status_code=403,
+                detail="Skin analysis requires a funded account. Top up to unlock.",
+            )
+
+        cost = settings.PRICE_SKIN_ANALYSIS_KOBO
+        if user.credits < cost:
+            raise HTTPException(status_code=402, detail="Insufficient balance for skin analysis")
+
+        user.credits -= cost
+        self.db.add(
+            CreditTransaction(
+                user_id=user.id,
+                amount=-cost,
+                reason="skin_analysis",
+            )
+        )
+        await self.db.commit()
+        await self.db.refresh(user)
+
+    # ------------------------------------------------------------------
+    # Voice transcription  (₦100 — paid users only)
+    # ------------------------------------------------------------------
+
+    async def deduct_for_voice(self, *, user: User, scan_id: uuid.UUID | None = None) -> None:
+        if not self.is_paid_user(user):
+            raise HTTPException(
+                status_code=403,
+                detail="Voice transcription requires a funded account. Top up to unlock.",
+            )
+
+        cost = settings.PRICE_VOICE_TRANSCRIPTION_KOBO
+        if user.credits < cost:
+            raise HTTPException(status_code=402, detail="Insufficient balance for voice transcription")
+
+        user.credits -= cost
+        self.db.add(
+            CreditTransaction(
+                user_id=user.id,
+                amount=-cost,
+                reason="voice_used",
+                scan_id=scan_id,
+            )
+        )
+        await self.db.commit()
+        await self.db.refresh(user)
+
+    # ------------------------------------------------------------------
+    # Grant (top-up / signup bonus)
+    # ------------------------------------------------------------------
+
     async def grant(self, *, user: User, amount: int, reason: str, scan_id: uuid.UUID | None = None) -> None:
         if amount == 0:
             return
@@ -74,4 +159,3 @@ class CreditManager:
         self.db.add(CreditTransaction(user_id=user.id, amount=int(amount), reason=reason, scan_id=scan_id))
         await self.db.commit()
         await self.db.refresh(user)
-

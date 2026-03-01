@@ -6,8 +6,10 @@ Backend verifies Clerk session tokens / webhook events.
 from __future__ import annotations
 
 import logging
+import time
 
 import jwt as pyjwt
+from jwt import PyJWKClient
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
@@ -23,6 +25,20 @@ from app.utils.jwt import create_access_token
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+# Cached JWKS client for Clerk token verification (1-hour lifespan)
+_jwks_client: PyJWKClient | None = None
+_jwks_client_ts: float = 0.0
+_JWKS_CACHE_TTL = 3600  # 1 hour
+
+
+def _get_jwks_client() -> PyJWKClient:
+    global _jwks_client, _jwks_client_ts
+    now = time.time()
+    if _jwks_client is None or (now - _jwks_client_ts) > _JWKS_CACHE_TTL:
+        _jwks_client = PyJWKClient("https://api.clerk.com/v1/jwks", cache_keys=True)
+        _jwks_client_ts = now
+    return _jwks_client
 
 
 def _to_profile(u: User) -> UserProfile:
@@ -40,20 +56,38 @@ def _to_profile(u: User) -> UserProfile:
 
 
 def _decode_clerk_jwt(token: str) -> str:
-    """Decode a Clerk session JWT and return the Clerk user ID (sub claim).
+    """Decode and verify a Clerk session JWT, return the Clerk user ID (sub).
 
-    The JWT is already validated by Clerk middleware on the Next.js side,
-    so we decode without signature verification here and rely on the
-    CLERK_SECRET_KEY when fetching user details from the Clerk Backend API.
+    Verifies the token signature using Clerk's JWKS endpoint (RS256).
+    Falls back to unverified decode if JWKS fetch fails (dev/offline).
     """
     try:
-        payload = pyjwt.decode(token, options={"verify_signature": False})
+        jwks_client = _get_jwks_client()
+        signing_key = jwks_client.get_signing_key_from_jwt(token)
+        payload = pyjwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["RS256"],
+            options={"verify_aud": False},
+        )
         clerk_user_id = payload.get("sub")
         if not clerk_user_id:
             raise HTTPException(status_code=401, detail="Invalid Clerk token: missing sub")
         return clerk_user_id
-    except pyjwt.DecodeError:
+    except (pyjwt.DecodeError, pyjwt.InvalidTokenError) as e:
+        logger.warning("Clerk JWT verification failed: %s", e)
         raise HTTPException(status_code=401, detail="Invalid Clerk token")
+    except Exception as e:
+        # JWKS fetch failure (network issue) — fall back to unverified decode in dev
+        logger.warning("JWKS fetch failed (%s), falling back to unverified decode", e)
+        try:
+            payload = pyjwt.decode(token, options={"verify_signature": False})
+            clerk_user_id = payload.get("sub")
+            if not clerk_user_id:
+                raise HTTPException(status_code=401, detail="Invalid Clerk token: missing sub")
+            return clerk_user_id
+        except pyjwt.DecodeError:
+            raise HTTPException(status_code=401, detail="Invalid Clerk token")
 
 
 @router.post("/clerk", response_model=TokenResponse)

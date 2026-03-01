@@ -79,13 +79,44 @@ def canonicalize(name: str) -> str:
     return name.strip().lower().replace(" ", "_").replace("-", "_")
 
 
+# Age-specific adjustments for key markers (pediatric <18, elderly >=65)
+_PEDIATRIC_OVERRIDES: dict[str, dict] = {
+    "hemoglobin": {"low": 11.5, "high": 15.5},
+    "wbc": {"low": 5.0, "high": 13.0},
+    "platelets": {"low": 150.0, "high": 450.0},
+    "glucose": {"low": 60.0, "high": 100.0},
+    "creatinine": {"low": 0.3, "high": 0.7},
+    "alp": {"low": 100.0, "high": 390.0},
+}
+
+_ELDERLY_OVERRIDES: dict[str, dict] = {
+    "glucose": {"low": 70.0, "high": 110.0},
+    "creatinine": {"low": 0.6, "high": 1.5},
+    "tsh": {"low": 0.4, "high": 5.0},
+    "esr": {"low": 0.0, "high": 30.0},
+    "psa": {"low": 0.0, "high": 6.5},
+}
+
+
 def get_reference_range(name: str, profile: dict | None = None) -> tuple[float | None, float | None, str | None]:
     key = canonicalize(name)
     item = REFERENCE_RANGES.get(key)
     if not item:
         return None, None, None
 
+    age = (profile or {}).get("age")
     sex = (profile or {}).get("sex")
+
+    # Check age-specific overrides first
+    if isinstance(age, (int, float)):
+        if age < 18 and key in _PEDIATRIC_OVERRIDES:
+            r = _PEDIATRIC_OVERRIDES[key]
+            return r["low"], r["high"], item.get("unit")
+        if age >= 65 and key in _ELDERLY_OVERRIDES:
+            r = _ELDERLY_OVERRIDES[key]
+            return r["low"], r["high"], item.get("unit")
+
+    # Standard adult sex-aware lookup
     group = "default"
     if sex == "male":
         group = "adult_male" if "adult_male" in item["ranges"] else "default"

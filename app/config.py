@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -16,6 +17,17 @@ class Settings(BaseSettings):
     JWT_SECRET: str = "change-me"
     JWT_ALG: str = "HS256"
     JWT_EXPIRES_MINUTES: int = 60 * 24 * 30  # 30 days
+
+    ENVIRONMENT: str = "development"  # development | production
+
+    @model_validator(mode="after")
+    def _check_jwt_secret(self) -> "Settings":
+        if self.ENVIRONMENT == "production" and self.JWT_SECRET == "change-me":
+            raise ValueError(
+                "JWT_SECRET must be set to a strong, unique value in production. "
+                "Do not use the default 'change-me'."
+            )
+        return self
 
     CLERK_SECRET_KEY: str | None = None
     CLERK_PUBLISHABLE_KEY: str | None = None
@@ -55,6 +67,21 @@ class Settings(BaseSettings):
     # Rate limiting
     RATE_LIMIT_REQUESTS: int = 60
     RATE_LIMIT_WINDOW_SECONDS: int = 60
+
+    # Pricing (all in kobo — ₦1 = 100 kobo)
+    PRICE_SCAN_UNLOCK_KOBO: int = 20_000       # ₦200
+    PRICE_CHAT_MESSAGE_KOBO: int = 5_000        # ₦50
+    PRICE_SKIN_ANALYSIS_KOBO: int = 25_000      # ₦250
+    PRICE_VOICE_TRANSCRIPTION_KOBO: int = 10_000  # ₦100
+    INITIAL_SIGNUP_BONUS_KOBO: int = 500_000    # ₦5,000
+
+    # Chat tier limits
+    CHAT_CHAR_LIMIT_FREE: int = 150
+    CHAT_CHAR_LIMIT_PAID: int = 250
+    CHAT_MSG_LIMIT_FREE: int = 5
+
+    # Speech-to-text (OpenAI Whisper)
+    OPENAI_API_KEY: str | None = None
 
 
 settings = Settings()

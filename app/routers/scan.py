@@ -11,9 +11,9 @@ from app.database import get_db
 from app.middleware.auth import get_current_user, get_optional_user
 from app.middleware.rate_limit import rate_limit
 from app.models import Interpretation, Marker, Scan, User
-from app.schemas.scan import ManualScanRequest, PreviewResponse, StatusResponse, UploadResponse
+from app.schemas.scan import ManualScanRequest, PreviewResponse, StatusCounts, StatusResponse, UploadResponse
 from app.schemas.marker import MarkerOut
-from app.services.scan_pipeline import run_upload_pipeline, run_manual_pipeline
+from app.tasks.scan_tasks import process_upload, process_manual
 from app.utils.storage import save_upload
 
 router = APIRouter(prefix="/scan", tags=["scan"])
@@ -39,9 +39,9 @@ async def upload_scan(
     await db.commit()
     await db.refresh(scan)
 
-    # Run pipeline inline (Celery/Redis not available in dev)
+    # Dispatch to Celery (falls back to sync execution if Redis unavailable)
     try:
-        await run_upload_pipeline(db=db, scan_id=scan.id, file_path=path, mime_type=mime)
+        process_upload.delay(str(scan.id), path, mime)
     except Exception as e:
         scan.status = "failed"
         scan.raw_ocr_text = f"PIPELINE_ERROR: {e}"
@@ -63,7 +63,7 @@ async def manual_scan(
 
     manual_markers = [{"name": m.marker, "value": m.value, "unit": m.unit} for m in payload.markers]
     try:
-        await run_manual_pipeline(db=db, scan_id=scan.id, manual_markers=manual_markers)
+        process_manual.delay(str(scan.id), manual_markers)
     except Exception as e:
         scan.status = "failed"
         scan.raw_ocr_text = f"PIPELINE_ERROR: {e}"
@@ -103,4 +103,36 @@ async def scan_preview(scan_id: str, db: AsyncSession = Depends(get_db)) -> Prev
         if m.is_preview
     ]
 
-    return PreviewResponse(preview_markers=preview, total_markers=len(markers))
+    # Fetch interpretation for summary
+    interp = (
+        await db.execute(select(Interpretation).where(Interpretation.scan_id == scan.id))
+    ).scalar_one_or_none()
+
+    preview_summary = interp.summary if interp else None
+
+    # Count marker statuses
+    counts = StatusCounts()
+    for m in markers:
+        status = (m.status or "").lower()
+        if status == "normal":
+            counts.normal += 1
+        elif status == "borderline_high":
+            counts.borderline_high += 1
+        elif status == "borderline_low":
+            counts.borderline_low += 1
+        elif status == "high":
+            counts.high += 1
+        elif status == "low":
+            counts.low += 1
+        elif status == "critical":
+            counts.critical += 1
+
+    created_at = scan.created_at.isoformat() if scan.created_at else None
+
+    return PreviewResponse(
+        preview_markers=preview,
+        total_markers=len(markers),
+        preview_summary=preview_summary,
+        status_counts=counts,
+        created_at=created_at,
+    )

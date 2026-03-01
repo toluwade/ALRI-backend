@@ -4,6 +4,8 @@ from app.models.marker import Marker
 from app.models.interpretation import Interpretation
 from app.models.credit import CreditTransaction
 from app.models.chat import ChatMessage
+from app.models.skin_analysis import SkinAnalysis
+from app.models.voice import VoiceTranscription
 
 __all__ = [
     "User",
@@ -12,4 +14,6 @@ __all__ = [
     "Interpretation",
     "CreditTransaction",
     "ChatMessage",
+    "SkinAnalysis",
+    "VoiceTranscription",
 ]

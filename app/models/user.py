@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -26,6 +26,9 @@ class User(Base):
 
     # Monetary balance stored in kobo (₦1 = 100 kobo)
     credits: Mapped[int] = mapped_column(Integer, default=500_000)
+
+    # True once user has topped up real money via Paystack (distinguishes free vs paid)
+    has_topped_up: Mapped[bool] = mapped_column(Boolean, default=False)
 
     referred_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     referrer = relationship("User", remote_side=[id], lazy="selectin")

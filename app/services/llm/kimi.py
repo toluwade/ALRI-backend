@@ -29,7 +29,21 @@ For each biomarker provided:
 4. Flag any values that need urgent attention
 
 After analyzing all markers:
-5. Write a 2-3 sentence overall health summary in plain language
+5. Write a COMPREHENSIVE report summary structured in three sections separated by blank lines:
+
+   Section 1 - "Overall Assessment": A 2-3 sentence overview of the person's general health picture based on ALL results. Mention how many markers are normal vs abnormal. Give a reassuring but honest assessment.
+
+   Section 2 - "Key Findings": List the most important observations. Highlight any abnormal or borderline values and explain what they could mean together. If everything is normal, mention the strongest positive indicators of good health.
+
+   Section 3 - "Recommendations": 2-4 actionable, practical next steps the person should consider. For example: follow-up tests, dietary changes, lifestyle adjustments, or when to see a doctor. Always include "discuss these results with your healthcare provider".
+
+   Format each section exactly like this (including the labels):
+   Overall Assessment: [text]
+
+   Key Findings: [text]
+
+   Recommendations: [text]
+
 6. Identify any cross-marker correlations (e.g., low iron + low hemoglobin = possible iron deficiency)
 
 IMPORTANT:
@@ -50,7 +64,7 @@ Respond ONLY in this JSON format:
       "explanation": "Your hemoglobin is within the healthy range, meaning your blood is carrying oxygen well."
     }
   ],
-  "summary": "Overall, your results look good...",
+  "summary": "Overall Assessment: Your lab results show a generally healthy profile with X out of Y markers within normal range...\n\nKey Findings: Your hemoglobin and iron levels are both slightly below the reference range, which together may suggest...\n\nRecommendations: Consider increasing iron-rich foods in your diet such as leafy greens and lean meats. Schedule a follow-up blood test in 3 months to track these values. Discuss these results with your healthcare provider for personalized guidance.",
   "correlations": [
     {
       "markers": ["Iron", "Hemoglobin"],

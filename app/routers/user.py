@@ -2,16 +2,17 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
 from app.middleware.auth import get_current_user
-from app.models import CreditTransaction, User
-from app.schemas.user import CreditsResponse
+from app.models import CreditTransaction, Marker, Scan, User
+from app.schemas.user import CreditsResponse, PricingInfo, UserTierInfo
+from app.services.credit_manager import CreditManager
 from app.services.paystack import initialize_transaction
 
 router = APIRouter(prefix="/user", tags=["user"])
@@ -31,10 +32,24 @@ class FundResponse(BaseModel):
 @router.get("/credits", response_model=CreditsResponse)
 async def credits(current_user: User = Depends(get_current_user)) -> CreditsResponse:
     bal = int(current_user.credits)
+    is_paid = CreditManager.is_paid_user(current_user)
+
     return CreditsResponse(
         balance_kobo=bal,
         balance_naira=bal / 100.0,
-        cost_per_scan_naira=500,
+        pricing=PricingInfo(
+            scan_unlock_naira=settings.PRICE_SCAN_UNLOCK_KOBO / 100,
+            chat_message_naira=settings.PRICE_CHAT_MESSAGE_KOBO / 100,
+            skin_analysis_naira=settings.PRICE_SKIN_ANALYSIS_KOBO / 100,
+            voice_transcription_naira=settings.PRICE_VOICE_TRANSCRIPTION_KOBO / 100,
+        ),
+        tier=UserTierInfo(
+            is_paid_user=is_paid,
+            chat_char_limit=settings.CHAT_CHAR_LIMIT_PAID if is_paid else settings.CHAT_CHAR_LIMIT_FREE,
+            chat_max_messages=999_999 if is_paid else settings.CHAT_MSG_LIMIT_FREE,
+            can_use_skin_analysis=is_paid,
+            can_use_voice=is_paid,
+        ),
     )
 
 
@@ -84,3 +99,67 @@ async def fund_account(
         access_code=data["access_code"],
         reference=data["reference"],
     )
+
+
+class ScanItem(BaseModel):
+    id: str
+    status: str
+    input_type: str | None
+    source: str | None
+    marker_count: int
+    abnormal_count: int
+    created_at: str
+
+
+class ScansResponse(BaseModel):
+    scans: list[ScanItem]
+    total: int
+    page: int
+    per_page: int
+
+
+@router.get("/scans", response_model=ScansResponse)
+async def list_scans(
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=20, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ScansResponse:
+    # Total count
+    total = (
+        await db.execute(
+            select(func.count()).select_from(Scan).where(Scan.user_id == current_user.id)
+        )
+    ).scalar_one()
+
+    # Paginated scans
+    offset = (page - 1) * per_page
+    scans = (
+        await db.execute(
+            select(Scan)
+            .where(Scan.user_id == current_user.id)
+            .order_by(Scan.created_at.desc())
+            .offset(offset)
+            .limit(per_page)
+        )
+    ).scalars().all()
+
+    items: list[ScanItem] = []
+    for s in scans:
+        markers = (
+            await db.execute(select(Marker).where(Marker.scan_id == s.id))
+        ).scalars().all()
+        abnormal = sum(1 for m in markers if m.status and m.status not in ("normal",))
+        items.append(
+            ScanItem(
+                id=str(s.id),
+                status=s.status or "processing",
+                input_type=s.input_type,
+                source=s.source,
+                marker_count=len(markers),
+                abnormal_count=abnormal,
+                created_at=s.created_at.isoformat() if hasattr(s.created_at, "isoformat") else str(s.created_at),
+            )
+        )
+
+    return ScansResponse(scans=items, total=int(total), page=page, per_page=per_page)

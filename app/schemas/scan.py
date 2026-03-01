@@ -18,9 +18,21 @@ class StatusResponse(BaseModel):
     status: str
 
 
+class StatusCounts(BaseModel):
+    normal: int = 0
+    borderline_high: int = 0
+    borderline_low: int = 0
+    high: int = 0
+    low: int = 0
+    critical: int = 0
+
+
 class PreviewResponse(BaseModel):
     preview_markers: list[MarkerOut]
     total_markers: int
+    preview_summary: str | None = None
+    status_counts: StatusCounts | None = None
+    created_at: str | None = None
 
 
 class FullResponse(BaseModel):

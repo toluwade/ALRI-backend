@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
@@ -8,9 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import CreditTransaction, User
+from app.models import CreditTransaction, Scan, User
 from app.services.paystack import verify_transaction, verify_webhook_signature
 from app.services.whatsapp import WhatsAppClient, extract_inbound_messages
+from app.tasks.scan_tasks import process_upload
+from app.utils.storage import save_upload
 
 
 logger = logging.getLogger(__name__)
@@ -81,6 +84,7 @@ async def paystack_webhook(request: Request, db: AsyncSession = Depends(get_db))
         raise HTTPException(status_code=404, detail="User not found")
 
     user.credits += amount_kobo
+    user.has_topped_up = True
     db.add(
         CreditTransaction(
             user_id=user.id,
@@ -114,13 +118,19 @@ async def whatsapp_verify(request: Request):
     raise HTTPException(status_code=403, detail="Webhook verification failed")
 
 
+def _get_media_id(message: dict) -> str | None:
+    """Extract media_id from a WhatsApp message (image or document)."""
+    mtype = message.get("type", "")
+    media_obj = message.get(mtype) or {}
+    return media_obj.get("id")
+
+
 @router.post("/whatsapp")
-async def whatsapp_incoming(payload: dict):
+async def whatsapp_incoming(payload: dict, db: AsyncSession = Depends(get_db)):
     """Incoming WhatsApp webhook messages.
 
-    This handler is intentionally lightweight. It extracts inbound messages and
-    responds with a basic acknowledgement. Media handling / scan triggering is
-    implemented in services and Celery tasks.
+    Handles text messages with instructions, and image/document messages
+    by downloading the media and triggering the scan pipeline.
     """
 
     msgs = extract_inbound_messages(payload)
@@ -139,15 +149,44 @@ async def whatsapp_incoming(payload: dict):
                 await wa.send_text(
                     to=from_,
                     body=(
-                        "Send a photo or PDF of your lab results and I’ll generate a free preview. "
-                        "To see the full interpretation, you’ll need 1 credit.\n\n"
+                        "Send a photo or PDF of your lab results and I'll generate a free preview. "
+                        "To see the full interpretation, you'll need 1 credit.\n\n"
                         f"You said: {text}"
                     ),
+                )
+            elif mtype in ("image", "document"):
+                media_id = _get_media_id(m)
+                if not media_id:
+                    await wa.send_text(to=from_, body="Could not read your file. Please try again.")
+                    continue
+
+                # Download the media file
+                media_url = await wa.get_media_url(media_id=media_id)
+                media_bytes = await wa.download_media(media_url=media_url)
+
+                # Determine filename and MIME type
+                media_obj = m.get(mtype) or {}
+                filename = media_obj.get("filename", f"whatsapp_{media_id}")
+                mime = media_obj.get("mime_type") or mimetypes.guess_type(filename)[0] or "application/octet-stream"
+
+                # Save file and create scan
+                path = save_upload(filename=filename, content=media_bytes)
+                scan = Scan(status="processing", input_type="upload", file_url=path, source="whatsapp")
+                db.add(scan)
+                await db.commit()
+                await db.refresh(scan)
+
+                # Trigger pipeline
+                process_upload.delay(str(scan.id), path, mime)
+
+                await wa.send_text(
+                    to=from_,
+                    body="Thanks! I received your file. Processing has started — I'll reply with a preview soon.",
                 )
             else:
                 await wa.send_text(
                     to=from_,
-                    body="Thanks! I received your file. Processing has started — I’ll reply with a preview soon.",
+                    body="Please send a photo or PDF of your lab results.",
                 )
         except Exception:
             logger.exception("Failed to process WhatsApp message")

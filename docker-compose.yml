@@ -9,6 +9,7 @@ services:
       - redis
     volumes:
       - uploads:/data/uploads
+      - ./app:/app/app
 
   worker:
     build: .
@@ -19,6 +20,7 @@ services:
     command: celery -A app.tasks.celery_app worker --loglevel=info
     volumes:
       - uploads:/data/uploads
+      - ./app:/app/app
 
   db:
     image: postgres:16-alpine
