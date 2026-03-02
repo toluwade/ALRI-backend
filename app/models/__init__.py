@@ -6,6 +6,7 @@ from app.models.credit import CreditTransaction
 from app.models.chat import ChatMessage
 from app.models.skin_analysis import SkinAnalysis
 from app.models.voice import VoiceTranscription
+from app.models.notification import Notification
 
 __all__ = [
     "User",
@@ -16,4 +17,5 @@ __all__ = [
     "ChatMessage",
     "SkinAnalysis",
     "VoiceTranscription",
+    "Notification",
 ]

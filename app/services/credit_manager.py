@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.models import CreditTransaction, Scan, User
+from app.services.notification_service import NotificationService
 
 
 class CreditManager:
@@ -71,6 +72,13 @@ class CreditManager:
                 scan_id=scan.id,
             )
         )
+        await NotificationService(self.db).create(
+            user_id=user.id,
+            type="credit_deducted",
+            title="Scan Unlock",
+            body=f"₦{cost // 100} deducted to unlock full scan results.",
+            ref_id=str(scan.id),
+        )
 
         await self.db.commit()
         await self.db.refresh(user)
@@ -95,6 +103,13 @@ class CreditManager:
                 reason="chat_used",
                 scan_id=scan_id,
             )
+        )
+        await NotificationService(self.db).create(
+            user_id=user.id,
+            type="credit_deducted",
+            title="Chat Message",
+            body=f"₦{cost // 100} deducted for a chat message.",
+            ref_id=str(scan_id),
         )
         await self.db.commit()
         await self.db.refresh(user)
@@ -121,6 +136,12 @@ class CreditManager:
                 amount=-cost,
                 reason="skin_analysis",
             )
+        )
+        await NotificationService(self.db).create(
+            user_id=user.id,
+            type="credit_deducted",
+            title="Skin Analysis",
+            body=f"₦{cost // 100} deducted for skin analysis.",
         )
         await self.db.commit()
         await self.db.refresh(user)
@@ -149,6 +170,13 @@ class CreditManager:
                 scan_id=scan_id,
             )
         )
+        await NotificationService(self.db).create(
+            user_id=user.id,
+            type="credit_deducted",
+            title="Voice Transcription",
+            body=f"₦{cost // 100} deducted for voice transcription.",
+            ref_id=str(scan_id) if scan_id else None,
+        )
         await self.db.commit()
         await self.db.refresh(user)
 
@@ -162,5 +190,11 @@ class CreditManager:
 
         user.credits += int(amount)
         self.db.add(CreditTransaction(user_id=user.id, amount=int(amount), reason=reason, scan_id=scan_id))
+        await NotificationService(self.db).create(
+            user_id=user.id,
+            type="credit_received",
+            title="Credits Received",
+            body=f"₦{amount // 100:,} credited: {reason.replace('_', ' ').title()}",
+        )
         await self.db.commit()
         await self.db.refresh(user)

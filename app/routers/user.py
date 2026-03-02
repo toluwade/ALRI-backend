@@ -101,6 +101,97 @@ async def fund_account(
     )
 
 
+class VerifyPaymentRequest(BaseModel):
+    reference: str
+
+
+class VerifyPaymentResponse(BaseModel):
+    status: str
+    amount_kobo: int = 0
+    balance_after_kobo: int = 0
+
+
+@router.post("/verify-payment", response_model=VerifyPaymentResponse)
+async def verify_payment(
+    body: VerifyPaymentRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> VerifyPaymentResponse:
+    """Verify a Paystack payment by reference and credit the user.
+
+    This complements the webhook — called by the frontend after the user
+    returns from Paystack. Uses the same idempotency logic as the webhook
+    to avoid double-crediting.
+    """
+    from app.services.paystack import verify_transaction
+    from app.services.notification_service import NotificationService
+
+    if not settings.PAYSTACK_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="Paystack not configured")
+
+    reference = body.reference.strip()
+    if not reference:
+        raise HTTPException(status_code=400, detail="Missing reference")
+
+    # Idempotency: already credited?
+    reason = f"paystack_success:{reference}"[:50]
+    existing = (
+        await db.execute(
+            select(CreditTransaction.id).where(CreditTransaction.reason == reason)
+        )
+    ).scalar_one_or_none()
+    if existing:
+        return VerifyPaymentResponse(
+            status="already_credited",
+            balance_after_kobo=int(current_user.credits),
+        )
+
+    # Verify with Paystack
+    try:
+        verified = await verify_transaction(reference)
+    except Exception:
+        raise HTTPException(status_code=502, detail="Could not verify with Paystack")
+
+    if verified.get("status") != "success":
+        return VerifyPaymentResponse(status="not_successful")
+
+    amount_kobo = int(verified.get("amount") or 0)
+    if amount_kobo <= 0:
+        raise HTTPException(status_code=400, detail="Invalid amount")
+
+    # Ensure this payment belongs to the current user
+    metadata = verified.get("metadata") or {}
+    payment_user_id = metadata.get("user_id")
+    if payment_user_id and str(payment_user_id) != str(current_user.id):
+        raise HTTPException(status_code=403, detail="Payment does not belong to this user")
+
+    # Credit the user
+    current_user.credits += amount_kobo
+    current_user.has_topped_up = True
+    db.add(
+        CreditTransaction(
+            user_id=current_user.id,
+            amount=amount_kobo,
+            reason=reason,
+            scan_id=None,
+        )
+    )
+    await NotificationService(db).create(
+        user_id=current_user.id,
+        type="credit_received",
+        title="Top-up Successful",
+        body=f"₦{amount_kobo // 100:,} has been added to your balance.",
+    )
+    await db.commit()
+    await db.refresh(current_user)
+
+    return VerifyPaymentResponse(
+        status="credited",
+        amount_kobo=amount_kobo,
+        balance_after_kobo=int(current_user.credits),
+    )
+
+
 @router.post("/profile", response_model=UpdateProfileResponse)
 async def update_profile(
     body: UpdateProfileRequest,
@@ -184,3 +275,127 @@ async def list_scans(
         )
 
     return ScansResponse(scans=items, total=int(total), page=page, per_page=per_page)
+
+
+# ------------------------------------------------------------------
+# Transaction history
+# ------------------------------------------------------------------
+
+_REASON_MAP: dict[str, tuple[str, str]] = {
+    "scan_used": ("deduction", "Scan Unlock"),
+    "chat_used": ("deduction", "Chat Message"),
+    "skin_analysis": ("deduction", "Skin Analysis"),
+    "voice_used": ("deduction", "Voice Transcription"),
+    "grant": ("reward", "Credit Bonus"),
+}
+
+
+def _classify_reason(reason: str, amount: int) -> tuple[str, str]:
+    """Derive a category and human-readable label from the raw reason."""
+    if reason in _REASON_MAP:
+        return _REASON_MAP[reason]
+    if reason.startswith("paystack_success:"):
+        return ("topup", "Paystack Top-up")
+    if reason.startswith("paystack_init:"):
+        return ("init", "Payment Initiated")
+    if "referral" in reason.lower():
+        return ("reward", "Referral Reward")
+    if "tester" in reason.lower():
+        return ("reward", "Tester Reward")
+    return ("reward" if amount > 0 else "deduction", reason.replace("_", " ").title())
+
+
+class TransactionItem(BaseModel):
+    id: str
+    amount: int
+    amount_naira: float
+    reason: str
+    category: str
+    label: str
+    scan_id: str | None
+    created_at: str
+
+
+class TransactionsResponse(BaseModel):
+    transactions: list[TransactionItem]
+    total: int
+    page: int
+    per_page: int
+    new_count: int
+
+
+@router.get("/transactions", response_model=TransactionsResponse)
+async def list_transactions(
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=20, ge=1, le=100),
+    since: str | None = Query(default=None, description="ISO timestamp — count new transactions after this"),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> TransactionsResponse:
+    from datetime import datetime, timezone
+
+    base_filter = [
+        CreditTransaction.user_id == current_user.id,
+        ~CreditTransaction.reason.startswith("paystack_init:"),
+    ]
+
+    total = (
+        await db.execute(
+            select(func.count()).select_from(CreditTransaction).where(*base_filter)
+        )
+    ).scalar_one()
+
+    # Count new transactions since the given timestamp
+    new_count = 0
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since).replace(tzinfo=timezone.utc)
+            new_count = (
+                await db.execute(
+                    select(func.count())
+                    .select_from(CreditTransaction)
+                    .where(*base_filter, CreditTransaction.created_at > since_dt)
+                )
+            ).scalar_one()
+            new_count = int(new_count)
+        except (ValueError, TypeError):
+            new_count = 0
+
+    offset = (page - 1) * per_page
+    rows = (
+        await db.execute(
+            select(CreditTransaction)
+            .where(*base_filter)
+            .order_by(CreditTransaction.created_at.desc())
+            .offset(offset)
+            .limit(per_page)
+        )
+    ).scalars().all()
+
+    items: list[TransactionItem] = []
+    for tx in rows:
+        cat, label = _classify_reason(tx.reason, tx.amount)
+        items.append(
+            TransactionItem(
+                id=str(tx.id),
+                amount=tx.amount,
+                amount_naira=tx.amount / 100.0,
+                reason=tx.reason,
+                category=cat,
+                label=label,
+                scan_id=str(tx.scan_id) if tx.scan_id else None,
+                created_at=(
+                    tx.created_at.isoformat()
+                    if hasattr(tx.created_at, "isoformat")
+                    else str(tx.created_at)
+                ),
+            )
+        )
+
+    return TransactionsResponse(
+        transactions=items,
+        total=int(total),
+        page=page,
+        per_page=per_page,
+        new_count=new_count,
+    )

@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import AsyncSessionLocal, Base, engine
-from app.routers import auth, health, scan, scan_full, skin, user, voice, webhook, chat
+from app.routers import auth, health, notification, scan, scan_full, skin, user, voice, webhook, chat
 from app.services.scan_cleanup import cleanup_stale_scans
 
 logger = logging.getLogger(__name__)
@@ -67,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(chat.router, prefix="/api/v1")
     app.include_router(skin.router, prefix="/api/v1")
     app.include_router(voice.router, prefix="/api/v1")
+    app.include_router(notification.router, prefix="/api/v1")
 
     return app
 

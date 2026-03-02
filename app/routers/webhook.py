@@ -93,6 +93,13 @@ async def paystack_webhook(request: Request, db: AsyncSession = Depends(get_db))
             scan_id=None,
         )
     )
+    from app.services.notification_service import NotificationService
+    await NotificationService(db).create(
+        user_id=user.id,
+        type="credit_received",
+        title="Top-up Successful",
+        body=f"₦{amount_kobo // 100:,} has been added to your balance.",
+    )
     await db.commit()
 
     return {"status": "ok"}

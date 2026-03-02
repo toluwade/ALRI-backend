@@ -174,6 +174,16 @@ async def clerk_sign_in(request: Request, db: AsyncSession = Depends(get_db)) ->
             user.phone = phone
         await db.commit()
 
+    # Log session notification
+    from app.services.notification_service import NotificationService
+    await NotificationService(db).create(
+        user_id=user.id,
+        type="login_session",
+        title="New Login",
+        body="You signed in to your account.",
+    )
+    await db.commit()
+
     token = create_access_token(user_id=user.id)
     return TokenResponse(access_token=token)
 
