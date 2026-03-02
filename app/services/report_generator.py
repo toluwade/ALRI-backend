@@ -32,6 +32,7 @@ class ReportGenerator:
         summary: str | None,
         correlations: list[dict] | None,
         user_profile: dict | None = None,
+        user_name: str | None = None,
     ) -> bytes:
         buf = io.BytesIO()
         c = canvas.Canvas(buf, pagesize=letter)
@@ -43,6 +44,9 @@ class ReportGenerator:
 
         y -= 0.35 * inch
         c.setFont("Helvetica", 10)
+        if user_name:
+            c.drawString(0.75 * inch, y, f"Patient: {user_name}")
+            y -= 0.2 * inch
         c.drawString(0.75 * inch, y, f"Scan ID: {scan_id}")
         y -= 0.2 * inch
         c.drawString(0.75 * inch, y, f"Generated: {datetime.utcnow().isoformat()}Z")

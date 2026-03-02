@@ -130,6 +130,8 @@ async def scan_preview(scan_id: str, db: AsyncSession = Depends(get_db)) -> Prev
     created_at = scan.created_at.isoformat() if scan.created_at else None
 
     return PreviewResponse(
+        scan_status=scan.status or "processing",
+        locked=not scan.full_unlocked,
         preview_markers=preview,
         total_markers=len(markers),
         preview_summary=preview_summary,

@@ -10,6 +10,7 @@ services:
     volumes:
       - uploads:/data/uploads
       - ./app:/app/app
+      - ./alembic:/app/alembic
 
   worker:
     build: .
@@ -21,6 +22,7 @@ services:
     volumes:
       - uploads:/data/uploads
       - ./app:/app/app
+      - ./alembic:/app/alembic
 
   db:
     image: postgres:16-alpine

@@ -28,6 +28,8 @@ class StatusCounts(BaseModel):
 
 
 class PreviewResponse(BaseModel):
+    scan_status: str = "processing"
+    locked: bool = True
     preview_markers: list[MarkerOut]
     total_markers: int
     preview_summary: str | None = None

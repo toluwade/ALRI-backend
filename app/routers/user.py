@@ -11,7 +11,7 @@ from app.config import settings
 from app.database import get_db
 from app.middleware.auth import get_current_user
 from app.models import CreditTransaction, Marker, Scan, User
-from app.schemas.user import CreditsResponse, PricingInfo, UserTierInfo
+from app.schemas.user import CreditsResponse, PricingInfo, UpdateProfileRequest, UpdateProfileResponse, UserTierInfo
 from app.services.credit_manager import CreditManager
 from app.services.paystack import initialize_transaction
 
@@ -98,6 +98,27 @@ async def fund_account(
         authorization_url=data["authorization_url"],
         access_code=data["access_code"],
         reference=data["reference"],
+    )
+
+
+@router.post("/profile", response_model=UpdateProfileResponse)
+async def update_profile(
+    body: UpdateProfileRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UpdateProfileResponse:
+    current_user.age = body.age
+    current_user.sex = body.sex
+    current_user.weight_kg = body.weight_kg
+    current_user.height_cm = body.height_cm
+    await db.commit()
+    await db.refresh(current_user)
+    return UpdateProfileResponse(
+        ok=True,
+        age=current_user.age,
+        sex=current_user.sex,
+        weight_kg=current_user.weight_kg,
+        height_cm=current_user.height_cm,
     )
 
 

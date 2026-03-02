@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class PricingInfo(BaseModel):
@@ -23,3 +23,18 @@ class CreditsResponse(BaseModel):
     balance_naira: float
     pricing: PricingInfo
     tier: UserTierInfo
+
+
+class UpdateProfileRequest(BaseModel):
+    age: int = Field(..., ge=1, le=150)
+    sex: str = Field(..., pattern=r"^(male|female)$")
+    weight_kg: float | None = Field(None, ge=1, le=500)
+    height_cm: float | None = Field(None, ge=30, le=300)
+
+
+class UpdateProfileResponse(BaseModel):
+    ok: bool
+    age: int
+    sex: str
+    weight_kg: float | None
+    height_cm: float | None

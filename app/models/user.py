@@ -23,6 +23,8 @@ class User(Base):
 
     age: Mapped[int | None] = mapped_column(Integer)
     sex: Mapped[str | None] = mapped_column(String(10))  # male | female
+    weight_kg: Mapped[float | None] = mapped_column(Integer)  # weight in kg
+    height_cm: Mapped[float | None] = mapped_column(Integer)  # height in cm
 
     # Monetary balance stored in kobo (₦1 = 100 kobo)
     credits: Mapped[int] = mapped_column(Integer, default=500_000)

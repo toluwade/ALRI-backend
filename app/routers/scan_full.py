@@ -102,6 +102,76 @@ async def get_scan_full(
     )
 
 
+class SharedScanResponse(BaseModel):
+    markers: list[dict]
+    summary: str | None
+    correlations: list[dict] | None
+    total_markers: int
+    abnormal_count: int
+    shared_by: str | None
+    disclaimer: str
+
+
+@router.get("/{scan_id}/shared", response_model=SharedScanResponse)
+async def get_scan_shared(
+    scan_id: uuid.UUID,
+    db: AsyncSession = Depends(get_db),
+) -> SharedScanResponse:
+    """Public endpoint — returns full results for completed + unlocked scans."""
+    scan = (await db.execute(select(Scan).where(Scan.id == scan_id))).scalar_one_or_none()
+    if scan is None:
+        raise HTTPException(status_code=404, detail="Scan not found")
+
+    if scan.status != "completed":
+        raise HTTPException(status_code=409, detail="Scan not yet completed")
+
+    if not scan.full_unlocked:
+        raise HTTPException(status_code=403, detail="Scan results have not been unlocked")
+
+    markers = (
+        await db.execute(select(Marker).where(Marker.scan_id == scan_id).order_by(Marker.created_at.asc()))
+    ).scalars().all()
+    interpretation = (
+        await db.execute(select(Interpretation).where(Interpretation.scan_id == scan_id))
+    ).scalar_one_or_none()
+
+    marker_dicts: list[dict] = []
+    abnormal = 0
+    for m in markers:
+        if m.status and m.status != "normal":
+            abnormal += 1
+        marker_dicts.append(
+            {
+                "name": m.name,
+                "value": float(m.value) if m.value is not None else None,
+                "unit": m.unit,
+                "reference_low": float(m.reference_low) if m.reference_low is not None else None,
+                "reference_high": float(m.reference_high) if m.reference_high is not None else None,
+                "status": m.status,
+                "explanation": m.explanation,
+            }
+        )
+
+    summary = None
+    correlations = None
+    if interpretation:
+        summary = interpretation.summary
+        correlations = interpretation.correlations if isinstance(interpretation.correlations, list) else None
+
+    # Resolve the scan owner's name (relationship is selectin-loaded)
+    shared_by = scan.user.name if scan.user else None
+
+    return SharedScanResponse(
+        markers=marker_dicts,
+        summary=summary,
+        correlations=correlations,
+        total_markers=len(marker_dicts),
+        abnormal_count=abnormal,
+        shared_by=shared_by,
+        disclaimer=MEDICAL_DISCLAIMER,
+    )
+
+
 @router.get("/{scan_id}/report")
 async def get_scan_report(
     scan_id: uuid.UUID,
@@ -147,6 +217,7 @@ async def get_scan_report(
         summary=interpretation.summary if interpretation else None,
         correlations=interpretation.correlations if interpretation and isinstance(interpretation.correlations, list) else None,
         user_profile=user_profile,
+        user_name=user.name,
     )
 
     return Response(
