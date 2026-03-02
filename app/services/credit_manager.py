@@ -43,11 +43,14 @@ class CreditManager:
     # Scan unlock  (₦200 — everyone)
     # ------------------------------------------------------------------
 
-    async def require_and_deduct_for_full_scan(self, *, user: User, scan: Scan) -> None:
-        """First-access charge for a full scan.  Idempotent via scan.credit_deducted."""
+    async def require_and_deduct_for_full_scan(self, *, user: User, scan: Scan) -> dict | None:
+        """First-access charge for a full scan.  Idempotent via scan.credit_deducted.
+
+        Returns deduction info dict on first charge, None if already charged.
+        """
 
         if scan.credit_deducted:
-            return
+            return None
 
         if scan.user_id != user.id:
             raise HTTPException(status_code=403, detail="Scan does not belong to current user")
@@ -72,6 +75,8 @@ class CreditManager:
         await self.db.commit()
         await self.db.refresh(user)
         await self.db.refresh(scan)
+
+        return {"amount_deducted_kobo": cost, "balance_after_kobo": user.credits}
 
     # ------------------------------------------------------------------
     # Chat message  (₦50 — everyone)

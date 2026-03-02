@@ -32,6 +32,8 @@ class FullScanResponse(BaseModel):
     correlations: list[dict] | None
     report_url: str | None
     disclaimer: str
+    amount_deducted_kobo: int | None = None
+    balance_after_kobo: int | None = None
 
 
 @router.get("/{scan_id}/full", response_model=FullScanResponse)
@@ -62,7 +64,7 @@ async def get_scan_full(
         raise HTTPException(status_code=409, detail=f"Scan not completed (status={scan.status})")
 
     cm = CreditManager(db)
-    await cm.require_and_deduct_for_full_scan(user=user, scan=scan)
+    deduction = await cm.require_and_deduct_for_full_scan(user=user, scan=scan)
 
     markers = (
         await db.execute(select(Marker).where(Marker.scan_id == scan_id).order_by(Marker.created_at.asc()))
@@ -99,6 +101,8 @@ async def get_scan_full(
         correlations=correlations,
         report_url=report_url or f"/api/v1/scan/{scan_id}/report",
         disclaimer=MEDICAL_DISCLAIMER,
+        amount_deducted_kobo=deduction["amount_deducted_kobo"] if deduction else None,
+        balance_after_kobo=deduction["balance_after_kobo"] if deduction else None,
     )
 
 
