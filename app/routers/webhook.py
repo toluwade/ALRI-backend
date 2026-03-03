@@ -4,13 +4,11 @@ import logging
 import mimetypes
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.database import get_db
-from app.models import CreditTransaction, Scan, User
-from app.services.paystack import verify_transaction, verify_webhook_signature
+from app.models import Scan
 from app.services.whatsapp import WhatsAppClient, extract_inbound_messages
 from app.tasks.scan_tasks import process_upload
 from app.utils.storage import save_upload
@@ -19,90 +17,6 @@ from app.utils.storage import save_upload
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/v1/webhook", tags=["webhook"])
-
-
-@router.post("/paystack")
-async def paystack_webhook(request: Request, db: AsyncSession = Depends(get_db)):
-    """Handle Paystack webhook events.
-
-    We credit user balance (kobo) on successful payments.
-    """
-
-    signature = request.headers.get("x-paystack-signature") or ""
-    body = await request.body()
-
-    if not verify_webhook_signature(body, signature):
-        raise HTTPException(status_code=400, detail="Invalid signature")
-
-    payload = await request.json()
-    event = payload.get("event")
-    data = payload.get("data") or {}
-
-    # We only handle successful charges.
-    if event not in {"charge.success"}:
-        return {"status": "ignored"}
-
-    reference = data.get("reference")
-    if not reference:
-        raise HTTPException(status_code=400, detail="Missing reference")
-
-    # Idempotency: if we've already credited this reference, skip.
-    reason = f"paystack_success:{reference}"[:50]
-    existing = (
-        await db.execute(
-            select(CreditTransaction.id).where(
-                CreditTransaction.reason == reason,
-            )
-        )
-    ).scalar_one_or_none()
-    if existing:
-        return {"status": "ok", "duplicate": True}
-
-    # Verify with Paystack for safety.
-    verified = await verify_transaction(reference)
-    if verified.get("status") != "success":
-        raise HTTPException(status_code=400, detail="Transaction not successful")
-
-    amount_kobo = int(verified.get("amount") or 0)
-    if amount_kobo <= 0:
-        raise HTTPException(status_code=400, detail="Invalid amount")
-
-    metadata = verified.get("metadata") or {}
-    user_id = metadata.get("user_id")
-    if not user_id:
-        raise HTTPException(status_code=400, detail="Missing user_id metadata")
-
-    import uuid
-
-    try:
-        uid = uuid.UUID(str(user_id))
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid user_id")
-
-    user = (await db.execute(select(User).where(User.id == uid))).scalar_one_or_none()
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    user.credits += amount_kobo
-    user.has_topped_up = True
-    db.add(
-        CreditTransaction(
-            user_id=user.id,
-            amount=amount_kobo,
-            reason=reason,
-            scan_id=None,
-        )
-    )
-    from app.services.notification_service import NotificationService
-    await NotificationService(db).create(
-        user_id=user.id,
-        type="credit_received",
-        title="Top-up Successful",
-        body=f"₦{amount_kobo // 100:,} has been added to your balance.",
-    )
-    await db.commit()
-
-    return {"status": "ok"}
 
 
 @router.get("/whatsapp")

@@ -16,7 +16,7 @@ class CreditTransaction(Base):
 
     user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"), index=True)
     amount: Mapped[int] = mapped_column(Integer)  # + earned, - spent
-    reason: Mapped[str] = mapped_column(String(50))
+    reason: Mapped[str] = mapped_column(String(150))
 
     scan_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("scans.id"), index=True)
 

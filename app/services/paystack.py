@@ -4,8 +4,6 @@ Supports card, bank transfer, Opay, USSD — all via Paystack's unified API.
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import logging
 
 import httpx
@@ -70,15 +68,3 @@ async def verify_transaction(reference: str) -> dict:
         )
         resp.raise_for_status()
         return resp.json()["data"]
-
-
-def verify_webhook_signature(body: bytes, signature: str) -> bool:
-    """Verify Paystack webhook HMAC signature."""
-    if not settings.PAYSTACK_WEBHOOK_SECRET:
-        return False
-    expected = hmac.new(
-        settings.PAYSTACK_WEBHOOK_SECRET.encode(),
-        body,
-        hashlib.sha512,
-    ).hexdigest()
-    return hmac.compare_digest(expected, signature)

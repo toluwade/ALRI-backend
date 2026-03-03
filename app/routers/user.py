@@ -88,7 +88,7 @@ async def fund_account(
         CreditTransaction(
             user_id=current_user.id,
             amount=0,
-            reason=f"paystack_init:{reference}"[:50],
+            reason=f"paystack_init:{reference}",
             scan_id=None,
         )
     )
@@ -109,6 +109,7 @@ class VerifyPaymentResponse(BaseModel):
     status: str
     amount_kobo: int = 0
     balance_after_kobo: int = 0
+    is_paid_user: bool = False
 
 
 @router.post("/verify-payment", response_model=VerifyPaymentResponse)
@@ -134,7 +135,7 @@ async def verify_payment(
         raise HTTPException(status_code=400, detail="Missing reference")
 
     # Idempotency: already credited?
-    reason = f"paystack_success:{reference}"[:50]
+    reason = f"paystack_success:{reference}"
     existing = (
         await db.execute(
             select(CreditTransaction.id).where(CreditTransaction.reason == reason)
@@ -144,6 +145,7 @@ async def verify_payment(
         return VerifyPaymentResponse(
             status="already_credited",
             balance_after_kobo=int(current_user.credits),
+            is_paid_user=CreditManager.is_paid_user(current_user),
         )
 
     # Verify with Paystack
@@ -153,7 +155,7 @@ async def verify_payment(
         raise HTTPException(status_code=502, detail="Could not verify with Paystack")
 
     if verified.get("status") != "success":
-        return VerifyPaymentResponse(status="not_successful")
+        return VerifyPaymentResponse(status="not_successful", is_paid_user=CreditManager.is_paid_user(current_user))
 
     amount_kobo = int(verified.get("amount") or 0)
     if amount_kobo <= 0:
@@ -189,6 +191,7 @@ async def verify_payment(
         status="credited",
         amount_kobo=amount_kobo,
         balance_after_kobo=int(current_user.credits),
+        is_paid_user=CreditManager.is_paid_user(current_user),
     )
 
 
