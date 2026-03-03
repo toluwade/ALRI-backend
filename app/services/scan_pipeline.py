@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 import uuid
 
@@ -12,6 +14,18 @@ from app.models import Interpretation, Marker, Scan, User
 from app.services.llm.factory import get_llm_provider
 from app.services.ocr.tesseract import TesseractOCR
 from app.services.preview_selector import select_preview_markers
+
+logger = logging.getLogger(__name__)
+
+
+def _delete_upload(file_path: str) -> None:
+    """Remove the uploaded file from disk after extraction. Best-effort, never raises."""
+    try:
+        if file_path and os.path.isfile(file_path):
+            os.remove(file_path)
+            logger.info("Deleted upload: %s", file_path)
+    except OSError as e:
+        logger.warning("Could not delete upload %s: %s", file_path, e)
 
 
 MEDICAL_DISCLAIMER = (
@@ -100,7 +114,7 @@ async def run_upload_pipeline(*, db: AsyncSession, scan_id: uuid.UUID, file_path
         with open(file_path, "rb") as f:
             content = f.read()
 
-        # OCR: Tesseract (PaddleOCR requires x86, this server is ARM64)
+        # OCR: Tesseract with preprocessing (PaddleOCR requires x86, this server is ARM64)
         text = ""
         try:
             text = await TesseractOCR().extract_text(file_bytes=content, filename=file_path, mime_type=mime_type)
@@ -114,17 +128,15 @@ async def run_upload_pipeline(*, db: AsyncSession, scan_id: uuid.UUID, file_path
         llm = get_llm_provider()
 
         # If OCR extracted few/no markers, send image directly to LLM (vision)
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.warning(f"OCR extracted {len(extracted)} markers from scan {scan.id}")
-        
+        logger.info("OCR extracted %d markers from scan %s", len(extracted), scan.id)
+
         if len(extracted) < 2 and hasattr(llm, "interpret_image"):
-            logger.warning(f"Using VISION MODE for scan {scan.id}")
+            logger.info("Using VISION MODE for scan %s", scan.id)
             try:
                 interpreted = await llm.interpret_image(content, mime_type, profile)
                 scan.raw_ocr_text = (text or "") + "\n\n[VISION MODE: OCR extracted <2 markers, sent image to LLM directly]"
             except Exception as vision_err:
-                logger.error(f"Vision failed for scan {scan.id}: {vision_err}")
+                logger.error("Vision failed for scan %s: %s", scan.id, vision_err)
                 # Fall back to text-based interpretation
                 enriched = _enrich_with_reference(extracted, profile)
                 interpreted = await llm.interpret(enriched, profile)
@@ -139,6 +151,9 @@ async def run_upload_pipeline(*, db: AsyncSession, scan_id: uuid.UUID, file_path
         scan.status = "failed"
         scan.raw_ocr_text = (scan.raw_ocr_text or "") + f"\n\nPIPELINE_ERROR: {e}"
     finally:
+        # Clean up: delete the uploaded file — extracted data is in the DB now
+        _delete_upload(file_path)
+        scan.file_url = None
         await db.commit()
 
 

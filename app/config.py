@@ -80,7 +80,8 @@ class Settings(BaseSettings):
     CHAT_CHAR_LIMIT_PAID: int = 250
     CHAT_MSG_LIMIT_FREE: int = 5
 
-    # Speech-to-text (OpenAI Whisper)
+    # Speech-to-text (Groq preferred — free + faster; OpenAI Whisper as fallback)
+    GROQ_API_KEY: str | None = None
     OPENAI_API_KEY: str | None = None
 
 

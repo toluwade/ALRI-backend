@@ -5,8 +5,36 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageFilter, ImageOps
 import pytesseract
+
+
+# Minimum width for OCR accuracy — smaller images get upscaled
+_MIN_OCR_WIDTH = 1800
+
+
+def _preprocess_for_ocr(img: Image.Image) -> Image.Image:
+    """Prepare a photo/scan for Tesseract: rotate, grayscale, contrast, sharpen, upscale."""
+
+    # 1. Auto-rotate based on EXIF orientation (phone photos)
+    img = ImageOps.exif_transpose(img) or img
+
+    # 2. Convert to grayscale (removes colour noise, faster OCR)
+    img = img.convert("L")
+
+    # 3. Upscale small images so Tesseract has enough detail
+    w, h = img.size
+    if w < _MIN_OCR_WIDTH:
+        scale = _MIN_OCR_WIDTH / w
+        img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+
+    # 4. Auto-contrast (boosts faded / WhatsApp-compressed text)
+    img = ImageOps.autocontrast(img, cutoff=1)
+
+    # 5. Sharpen (counteracts compression blur)
+    img = img.filter(ImageFilter.SHARPEN)
+
+    return img
 
 
 class TesseractOCR:
@@ -31,6 +59,7 @@ class TesseractOCR:
 
     def _extract_image(self, content: bytes) -> str:
         img = Image.open(io.BytesIO(content))
+        img = _preprocess_for_ocr(img)
         return pytesseract.image_to_string(img)
 
     def _extract_pdf(self, content: bytes) -> str:
@@ -48,6 +77,7 @@ class TesseractOCR:
                 )
                 for img_path in sorted(Path(tmpdir).glob("page-*.png")):
                     img = Image.open(img_path)
+                    img = _preprocess_for_ocr(img)
                     text = pytesseract.image_to_string(img)
                     if text.strip():
                         texts.append(text.strip())
@@ -55,6 +85,7 @@ class TesseractOCR:
                 # pdftoppm not available — try PIL direct (won't work for most PDFs)
                 try:
                     img = Image.open(io.BytesIO(content))
+                    img = _preprocess_for_ocr(img)
                     texts.append(pytesseract.image_to_string(img))
                 except Exception:
                     raise RuntimeError("PDF OCR requires poppler-utils (pdftoppm). Install with: apt-get install poppler-utils")

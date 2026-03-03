@@ -13,7 +13,6 @@ from app.models import User
 from app.models.voice import VoiceTranscription
 from app.services.credit_manager import CreditManager
 from app.services.stt import SpeechToText
-from app.utils.storage import save_upload
 
 logger = logging.getLogger(__name__)
 
@@ -75,21 +74,14 @@ async def transcribe_voice(
     await db.refresh(record)
 
     try:
-        # Deduct ₦100
-        await cm.deduct_for_voice(user=user, scan_id=scan_uuid)
-        record.credit_deducted = True
-
-        # Save audio file
-        file_path = save_upload(
-            filename=f"voice_{record.id.hex}_{file.filename or 'audio.webm'}",
-            content=content,
-        )
-        record.audio_url = file_path
-
-        # Transcribe
+        # Transcribe in-memory first (no disk storage — audio is discarded after)
         stt = SpeechToText()
         text = await stt.transcribe(content, file.filename or "audio.webm")
         record.transcription = text
+
+        # Deduct ₦100 only after successful transcription
+        await cm.deduct_for_voice(user=user, scan_id=scan_uuid)
+        record.credit_deducted = True
 
         logger.info("Voice transcription %s completed for user %s", record.id, user.id)
 
@@ -99,7 +91,10 @@ async def transcribe_voice(
     except Exception as exc:
         await db.commit()
         logger.exception("Voice transcription %s failed: %s", record.id, exc)
-        raise HTTPException(status_code=500, detail="Transcription failed. Please try again.")
+        raise HTTPException(
+            status_code=503,
+            detail="Voice transcription is temporarily unavailable. Please try again in a moment.",
+        )
 
     await db.commit()
     await db.refresh(user)

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import logging
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,6 +14,9 @@ from app.middleware.auth import get_current_user
 from app.models import ChatMessage, Interpretation, Marker, Scan, User
 from app.services.credit_manager import CreditManager
 from app.services.llm.kimi import KimiProvider
+from app.services.ocr.tesseract import TesseractOCR
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/scan", tags=["chat"])
 
@@ -129,12 +133,13 @@ async def get_chat_history(
 @router.post("/{scan_id}/chat", response_model=ChatSendResponse)
 async def send_chat_message(
     scan_id: uuid.UUID,
-    body: ChatSendRequest,
+    message: str = Form(...),
+    file: UploadFile | None = File(None),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ChatSendResponse:
-    msg = (body.message or "").strip()
-    if not msg:
+    msg = (message or "").strip()
+    if not msg and not file:
         raise HTTPException(status_code=400, detail="message is required")
 
     cm = CreditManager(db)
@@ -147,6 +152,10 @@ async def send_chat_message(
             status_code=400,
             detail=f"Message exceeds {char_limit} character limit",
         )
+
+    # File attachments are PRO-only
+    if file and not is_paid:
+        raise HTTPException(status_code=403, detail="File attachments require a paid account")
 
     scan = (await db.execute(select(Scan).where(Scan.id == scan_id))).scalar_one_or_none()
     if not scan:
@@ -175,6 +184,27 @@ async def send_chat_message(
             status_code=429,
             detail="Message limit reached for this report. Top up to unlock unlimited messages.",
         )
+
+    # If file attached, run OCR to extract text (in-memory, no disk storage)
+    file_context = ""
+    if file:
+        try:
+            file_bytes = await file.read()
+            mime = file.content_type or "application/octet-stream"
+            ocr = TesseractOCR()
+            extracted_text = await ocr.extract_text(
+                file_bytes=file_bytes,
+                filename=file.filename or "",
+                mime_type=mime,
+            )
+            if extracted_text and extracted_text.strip():
+                file_context = f"\n\n[USER ATTACHED AN IMAGE — extracted text from image:\n{extracted_text.strip()}\n]"
+                logger.info("Chat file OCR extracted %d chars for scan %s", len(extracted_text), scan_id)
+            else:
+                file_context = "\n\n[USER ATTACHED AN IMAGE but no text could be extracted from it]"
+        except Exception as e:
+            logger.warning("Chat file OCR failed for scan %s: %s", scan_id, e)
+            file_context = "\n\n[USER ATTACHED AN IMAGE but OCR failed to process it]"
 
     # Deduct ₦50 for this message
     await cm.deduct_for_chat(user=user, scan_id=scan_id)
@@ -211,12 +241,15 @@ async def send_chat_message(
     ).scalars().all()
 
     llm_messages = [{"role": h.role, "content": h.content} for h in history]
-    llm_messages.append({"role": "user", "content": msg})
+    # Include file context in the LLM message so AI can reference the attached image's content
+    llm_messages.append({"role": "user", "content": msg + file_context})
 
     provider = KimiProvider()
     assistant_text = await provider.chat(messages=llm_messages, scan_context=context)
 
-    user_row = ChatMessage(scan_id=scan_id, user_id=user.id, role="user", content=msg)
+    # Store only the user's text in DB (not OCR output — keeps messages clean)
+    stored_msg = msg if not file else f"{msg}\n📎 Image attached" if msg else "📎 Image attached"
+    user_row = ChatMessage(scan_id=scan_id, user_id=user.id, role="user", content=stored_msg)
     assistant_row = ChatMessage(scan_id=scan_id, user_id=user.id, role="assistant", content=assistant_text)
     db.add_all([user_row, assistant_row])
     await db.commit()
