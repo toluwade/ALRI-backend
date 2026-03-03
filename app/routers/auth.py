@@ -18,10 +18,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
 from app.middleware.auth import get_current_user
-from app.models import User
+from app.models import CreditTransaction, User
 from app.schemas.auth import MeResponse, TokenResponse, UserProfile
 from app.services import email as email_svc
-from app.services.credit_manager import CreditManager
 from app.utils.jwt import create_access_token
 
 logger = logging.getLogger(__name__)
@@ -150,33 +149,48 @@ async def clerk_sign_in(request: Request, db: AsyncSession = Depends(get_db)) ->
 
     is_new = user is None
     if is_new:
+        # Credits are set atomically with user creation — if the row is
+        # created, the bonus is guaranteed to be there.
+        bonus = settings.INITIAL_SIGNUP_BONUS_KOBO
         user = User(
             email=email,
             phone=phone,
             name=name,
             avatar_url=avatar,
             auth_provider=provider,
+            credits=bonus,
         )
         db.add(user)
         await db.commit()
         await db.refresh(user)
+        logger.info("Created user %s with ₦%d signup bonus", user.id, bonus // 100)
 
-        # Grant signup bonus (creates CreditTransaction + notification)
+        # Record CreditTransaction + notification (non-critical — credits
+        # are already on the user row, so a failure here is cosmetic only).
         try:
-            cm = CreditManager(db)
-            await cm.grant(
-                user=user,
-                amount=settings.INITIAL_SIGNUP_BONUS_KOBO,
-                reason="signup_bonus",
+            db.add(
+                CreditTransaction(
+                    user_id=user.id,
+                    amount=bonus,
+                    reason="signup_bonus",
+                )
             )
-            logger.info("Granted ₦%d signup bonus to user %s", settings.INITIAL_SIGNUP_BONUS_KOBO // 100, user.id)
-        except Exception as e:
-            logger.error("Failed to grant signup bonus to user %s: %s", user.id, e)
-            # Fallback: set credits directly so user isn't left with 0
-            user.credits = settings.INITIAL_SIGNUP_BONUS_KOBO
+            from app.services.notification_service import NotificationService
+            await NotificationService(db).create(
+                user_id=user.id,
+                type="credit_received",
+                title="Welcome Bonus",
+                body=f"₦{bonus // 100:,} credited as your signup bonus.",
+            )
             await db.commit()
+        except Exception as e:
+            logger.warning("Failed to record signup bonus transaction for user %s: %s", user.id, e)
+            try:
+                await db.rollback()
+            except Exception:
+                pass
 
-        # Send welcome email
+        # Send welcome email (non-critical)
         if email:
             try:
                 await email_svc.send_welcome(email, name)
@@ -190,15 +204,22 @@ async def clerk_sign_in(request: Request, db: AsyncSession = Depends(get_db)) ->
             user.phone = phone
         await db.commit()
 
-    # Log session notification
-    from app.services.notification_service import NotificationService
-    await NotificationService(db).create(
-        user_id=user.id,
-        type="login_session",
-        title="New Login",
-        body="You signed in to your account.",
-    )
-    await db.commit()
+    # Log session notification (non-critical — must never break auth)
+    try:
+        from app.services.notification_service import NotificationService
+        await NotificationService(db).create(
+            user_id=user.id,
+            type="login_session",
+            title="New Login",
+            body="You signed in to your account.",
+        )
+        await db.commit()
+    except Exception as e:
+        logger.warning("Failed to log login notification for user %s: %s", user.id, e)
+        try:
+            await db.rollback()
+        except Exception:
+            pass
 
     token = create_access_token(user_id=user.id)
     return TokenResponse(access_token=token, is_new_user=is_new)

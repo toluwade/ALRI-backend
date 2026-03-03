@@ -63,12 +63,17 @@ async def get_scan_full(
     if scan.status != "completed":
         raise HTTPException(status_code=409, detail=f"Scan not completed (status={scan.status})")
 
-    cm = CreditManager(db)
-    deduction = await cm.require_and_deduct_for_full_scan(user=user, scan=scan)
-
     markers = (
         await db.execute(select(Marker).where(Marker.scan_id == scan_id).order_by(Marker.created_at.asc()))
     ).scalars().all()
+
+    # Only charge credits when markers were actually extracted.
+    # A 0-marker scan means OCR/vision couldn't read the report — don't penalise the user.
+    deduction = None
+    if markers:
+        cm = CreditManager(db)
+        deduction = await cm.require_and_deduct_for_full_scan(user=user, scan=scan)
+
     interpretation = (
         await db.execute(select(Interpretation).where(Interpretation.scan_id == scan_id))
     ).scalar_one_or_none()
