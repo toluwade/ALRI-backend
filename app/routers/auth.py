@@ -21,6 +21,7 @@ from app.middleware.auth import get_current_user
 from app.models import User
 from app.schemas.auth import MeResponse, TokenResponse, UserProfile
 from app.services import email as email_svc
+from app.services.credit_manager import CreditManager
 from app.utils.jwt import create_access_token
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,21 @@ async def clerk_sign_in(request: Request, db: AsyncSession = Depends(get_db)) ->
         db.add(user)
         await db.commit()
         await db.refresh(user)
+
+        # Grant signup bonus (creates CreditTransaction + notification)
+        try:
+            cm = CreditManager(db)
+            await cm.grant(
+                user=user,
+                amount=settings.INITIAL_SIGNUP_BONUS_KOBO,
+                reason="signup_bonus",
+            )
+            logger.info("Granted ₦%d signup bonus to user %s", settings.INITIAL_SIGNUP_BONUS_KOBO // 100, user.id)
+        except Exception as e:
+            logger.error("Failed to grant signup bonus to user %s: %s", user.id, e)
+            # Fallback: set credits directly so user isn't left with 0
+            user.credits = settings.INITIAL_SIGNUP_BONUS_KOBO
+            await db.commit()
 
         # Send welcome email
         if email:

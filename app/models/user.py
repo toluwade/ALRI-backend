@@ -27,7 +27,8 @@ class User(Base):
     height_cm: Mapped[float | None] = mapped_column(Integer)  # height in cm
 
     # Monetary balance stored in kobo (₦1 = 100 kobo)
-    credits: Mapped[int] = mapped_column(Integer, default=500_000)
+    # Starts at 0; signup bonus is granted explicitly via CreditManager.grant()
+    credits: Mapped[int] = mapped_column(Integer, default=0)
 
     # True once user has topped up real money via Paystack (distinguishes free vs paid)
     has_topped_up: Mapped[bool] = mapped_column(Boolean, default=False)
