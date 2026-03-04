@@ -80,7 +80,7 @@ async def fund_account(
             "amount_kobo": amount_kobo,
             "kind": "fund",
         },
-        callback_url=body.callback_url or f"{settings.APP_URL.rstrip('/')}/dashboard",
+        callback_url=body.callback_url or f"{settings.FRONTEND_URL.rstrip('/')}/dashboard",
     )
 
     # record intent (optional) to allow idempotency checks later

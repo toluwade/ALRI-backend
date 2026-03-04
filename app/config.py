@@ -61,7 +61,8 @@ class Settings(BaseSettings):
     STORAGE_PATH: str = "/data/uploads"
 
     # App
-    APP_URL: str = "https://alri.health"
+    APP_URL: str = "https://api.alri.health"
+    FRONTEND_URL: str = "https://alri.health"
     CORS_ORIGINS: str = "https://alri.health,http://localhost:3000"
 
     # Rate limiting
