@@ -8,6 +8,13 @@ from pathlib import Path
 from PIL import Image, ImageFilter, ImageOps
 import pytesseract
 
+# Register HEIC/HEIF support so PIL can open iOS photos
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    pass
+
 
 # Minimum width for OCR accuracy — smaller images get upscaled
 _MIN_OCR_WIDTH = 1800
@@ -46,8 +53,8 @@ class TesseractOCR:
 
         # Determine type from mime or filename
         is_pdf = "pdf" in mt.lower() or fname.lower().endswith(".pdf")
-        is_image = any(x in mt.lower() for x in ["image", "png", "jpeg", "jpg", "webp", "heic"]) or \
-                   any(fname.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".heic"])
+        is_image = any(x in mt.lower() for x in ["image", "png", "jpeg", "jpg", "webp", "heic", "heif"]) or \
+                   any(fname.lower().endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".heic", ".heif"])
 
         if is_pdf:
             return self._extract_pdf(data)

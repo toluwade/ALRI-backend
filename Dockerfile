@@ -2,9 +2,11 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# System deps (tesseract optional for fallback)
+# System deps: tesseract (OCR fallback), poppler (PDF→PNG), libheif (HEIC images)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
+    poppler-utils \
+    libheif-dev \
     curl \
     && rm -rf /var/lib/apt/lists/*
 

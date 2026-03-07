@@ -24,3 +24,6 @@ paddleocr==2.9.1
 
 # Tesseract fallback
 pytesseract==0.3.13
+
+# HEIC image support (iOS photos)
+pillow-heif==0.21.0

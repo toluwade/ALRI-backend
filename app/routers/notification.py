@@ -40,11 +40,14 @@ async def list_notifications(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> NotificationsResponse:
-    base_filter = Notification.user_id == current_user.id
+    base_filter = (
+        Notification.user_id == current_user.id,
+        Notification.type != "login_session",  # legacy spam — no longer created
+    )
 
     total = (
         await db.execute(
-            select(func.count()).select_from(Notification).where(base_filter)
+            select(func.count()).select_from(Notification).where(*base_filter)
         )
     ).scalar_one()
 
@@ -52,7 +55,7 @@ async def list_notifications(
         await db.execute(
             select(func.count())
             .select_from(Notification)
-            .where(base_filter, Notification.is_read == False)  # noqa: E712
+            .where(*base_filter, Notification.is_read == False)  # noqa: E712
         )
     ).scalar_one()
 
@@ -60,7 +63,7 @@ async def list_notifications(
     rows = (
         await db.execute(
             select(Notification)
-            .where(base_filter)
+            .where(*base_filter)
             .order_by(Notification.created_at.desc())
             .offset(offset)
             .limit(per_page)

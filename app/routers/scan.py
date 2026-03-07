@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import mimetypes
 import uuid
 
@@ -16,7 +17,41 @@ from app.schemas.marker import MarkerOut
 from app.tasks.scan_tasks import process_upload, process_manual
 from app.utils.storage import save_upload
 
+logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/scan", tags=["scan"])
+
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10 MB
+
+ALLOWED_MIMES = {
+    "application/pdf",
+    "image/jpeg",
+    "image/png",
+    "image/heic",
+    "image/heif",
+    "image/webp",
+}
+
+# Magic bytes for reliable file-type detection (mobile browsers send wrong MIME)
+_MAGIC = {
+    b"%PDF": "application/pdf",
+    b"\xff\xd8\xff": "image/jpeg",
+    b"\x89PNG": "image/png",
+}
+
+
+def _detect_mime(content: bytes, declared_mime: str, filename: str) -> str:
+    """Determine real MIME type from magic bytes, falling back to declared/guessed."""
+    for magic, mime in _MAGIC.items():
+        if content[:len(magic)] == magic:
+            return mime
+    # HEIC/HEIF: ftyp box at offset 4
+    if len(content) >= 12 and content[4:8] == b"ftyp":
+        brand = content[8:12]
+        if brand in (b"heic", b"heix", b"mif1", b"hevc"):
+            return "image/heic"
+    # Fall back to declared or guessed
+    mime = declared_mime or mimetypes.guess_type(filename or "")[0] or "application/octet-stream"
+    return mime
 
 
 @router.post("/upload", response_model=UploadResponse, dependencies=[Depends(rate_limit)])
@@ -30,9 +65,14 @@ async def upload_scan(
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="Empty upload")
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File too large. Maximum size is 10 MB.")
+
+    mime = _detect_mime(content, file.content_type or "", file.filename or "")
+    if mime not in ALLOWED_MIMES:
+        raise HTTPException(status_code=415, detail="Unsupported file type. Upload a PDF, JPG, PNG, or HEIC.")
 
     path = save_upload(filename=file.filename or "upload", content=content)
-    mime = file.content_type or mimetypes.guess_type(file.filename or "")[0] or "application/octet-stream"
 
     scan = Scan(status="processing", input_type="upload", file_url=path, source=source, user_id=(current_user.id if current_user else None))
     db.add(scan)
