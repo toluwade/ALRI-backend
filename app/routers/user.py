@@ -402,3 +402,89 @@ async def list_transactions(
         per_page=per_page,
         new_count=new_count,
     )
+
+
+# ------------------------------------------------------------------
+# Promo code redemption
+# ------------------------------------------------------------------
+
+class RedeemPromoRequest(BaseModel):
+    code: str
+
+
+class RedeemPromoResponse(BaseModel):
+    ok: bool
+    credited_kobo: int = 0
+    balance_after_kobo: int = 0
+    message: str = ""
+
+
+@router.post("/redeem-promo", response_model=RedeemPromoResponse)
+async def redeem_promo(
+    body: RedeemPromoRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> RedeemPromoResponse:
+    from datetime import datetime, timezone
+    from app.models.promo import PromoCode, PromoRedemption
+
+    code = body.code.strip().upper()
+    if not code:
+        raise HTTPException(status_code=400, detail="Promo code required")
+
+    promo = (
+        await db.execute(select(PromoCode).where(PromoCode.code == code))
+    ).scalar_one_or_none()
+
+    if not promo or not promo.is_active:
+        raise HTTPException(status_code=404, detail="Invalid or expired promo code")
+
+    # Check expiry
+    if promo.expires_at:
+        expires = promo.expires_at
+        if hasattr(expires, "tzinfo") and expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+        if datetime.now(timezone.utc) > expires:
+            raise HTTPException(status_code=400, detail="This promo code has expired")
+
+    # Check max uses
+    if promo.max_uses > 0 and promo.current_uses >= promo.max_uses:
+        raise HTTPException(status_code=400, detail="This promo code has reached its usage limit")
+
+    # Check if already redeemed by this user
+    already = (
+        await db.execute(
+            select(PromoRedemption).where(
+                PromoRedemption.promo_code_id == promo.id,
+                PromoRedemption.user_id == current_user.id,
+            )
+        )
+    ).scalar_one_or_none()
+    if already:
+        raise HTTPException(status_code=400, detail="You have already redeemed this promo code")
+
+    # Credit user
+    amount = promo.discount_kobo
+    current_user.credits += amount
+    promo.current_uses += 1
+
+    db.add(PromoRedemption(promo_code_id=promo.id, user_id=current_user.id, credited_kobo=amount))
+    db.add(CreditTransaction(user_id=current_user.id, amount=amount, reason="promo_code"))
+
+    from app.services.notification_service import NotificationService
+    await NotificationService(db).create(
+        user_id=current_user.id,
+        type="credit_received",
+        title="Promo Code Redeemed",
+        body=f"₦{amount // 100:,} credited from promo code {promo.code}.",
+    )
+
+    await db.commit()
+    await db.refresh(current_user)
+
+    return RedeemPromoResponse(
+        ok=True,
+        credited_kobo=amount,
+        balance_after_kobo=int(current_user.credits),
+        message=f"₦{amount // 100:,} has been added to your balance!",
+    )

@@ -33,6 +33,8 @@ class User(Base):
     # True once user has topped up real money via Paystack (distinguishes free vs paid)
     has_topped_up: Mapped[bool] = mapped_column(Boolean, default=False)
 
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+
     referred_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     referrer = relationship("User", remote_side=[id], lazy="selectin")
 

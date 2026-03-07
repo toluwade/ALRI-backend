@@ -7,6 +7,7 @@ from app.models.chat import ChatMessage
 from app.models.skin_analysis import SkinAnalysis
 from app.models.voice import VoiceTranscription
 from app.models.notification import Notification
+from app.models.promo import PromoCode, PromoRedemption
 
 __all__ = [
     "User",
@@ -18,4 +19,6 @@ __all__ = [
     "SkinAnalysis",
     "VoiceTranscription",
     "Notification",
+    "PromoCode",
+    "PromoRedemption",
 ]

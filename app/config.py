@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     # App
     APP_URL: str = "https://api.alri.health"
     FRONTEND_URL: str = "https://alri.health"
-    CORS_ORIGINS: str = "https://alri.health,http://localhost:3000"
+    CORS_ORIGINS: str = "https://alri.health,https://admin.alri.health,http://localhost:3000,http://localhost:3001"
 
     # Rate limiting
     RATE_LIMIT_REQUESTS: int = 60

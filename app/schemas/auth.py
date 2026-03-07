@@ -11,6 +11,7 @@ class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
     is_new_user: bool = True
+    is_admin: bool = False
 
 
 class UserProfile(BaseModel):

@@ -205,7 +205,7 @@ async def clerk_sign_in(request: Request, db: AsyncSession = Depends(get_db)) ->
         await db.commit()
 
     token = create_access_token(user_id=user.id)
-    return TokenResponse(access_token=token, is_new_user=is_new)
+    return TokenResponse(access_token=token, is_new_user=is_new, is_admin=user.is_admin)
 
 
 @router.get("/me", response_model=MeResponse)
