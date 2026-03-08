@@ -289,6 +289,7 @@ _REASON_MAP: dict[str, tuple[str, str]] = {
     "chat_used": ("deduction", "Chat Message"),
     "skin_analysis": ("deduction", "Skin Analysis"),
     "voice_used": ("deduction", "Voice Transcription"),
+    "file_upload": ("deduction", "File Upload"),
     "grant": ("reward", "Credit Bonus"),
 }
 

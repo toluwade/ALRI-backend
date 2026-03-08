@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.middleware.auth import get_admin_user
 from app.models import CreditTransaction, PromoCode, PromoRedemption, Scan, User
+from app.models.tariff import Tariff
 from app.schemas.admin import (
     AdminScanItem,
     AdminScanListResponse,
@@ -30,7 +31,10 @@ from app.schemas.admin import (
     PromoCodeListResponse,
     PromoCodeResponse,
     PromoCodeUpdate,
+    TariffResponse,
+    TariffUpdate,
 )
+from app.services.tariff_loader import get_tariffs
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -41,6 +45,7 @@ _REASON_MAP: dict[str, tuple[str, str]] = {
     "chat_used": ("deduction", "Chat Message"),
     "skin_analysis": ("deduction", "Skin Analysis"),
     "voice_used": ("deduction", "Voice Transcription"),
+    "file_upload": ("deduction", "File Upload"),
     "grant": ("reward", "Credit Bonus"),
     "signup_bonus": ("reward", "Signup Bonus"),
     "promo_code": ("reward", "Promo Code"),
@@ -95,10 +100,20 @@ async def admin_stats(
         )
     ).scalar_one()
 
+    # Total bonuses = sum of all signup_bonus transactions
+    total_bonuses = (
+        await db.execute(
+            select(func.coalesce(func.sum(CreditTransaction.amount), 0)).where(
+                CreditTransaction.reason == "signup_bonus"
+            )
+        )
+    ).scalar_one()
+
     return AdminStatsResponse(
         total_users=int(total_users),
         total_scans=int(total_scans),
         total_revenue_kobo=int(total_revenue),
+        total_bonuses_kobo=int(total_bonuses),
         active_users_7d=int(active_users_7d),
         new_users_7d=int(new_users_7d),
     )
@@ -471,3 +486,59 @@ async def admin_delete_promo_code(
     promo.is_active = False
     await db.commit()
     return {"ok": True}
+
+
+# ── Tariffs ───────────────────────────────────────────
+
+def _tariff_to_response(t: Tariff) -> TariffResponse:
+    return TariffResponse(
+        signup_bonus_kobo=t.signup_bonus_kobo,
+        referral_bonus_kobo=t.referral_bonus_kobo,
+        cost_per_chat_kobo=t.cost_per_chat_kobo,
+        cost_per_file_upload_kobo=t.cost_per_file_upload_kobo,
+        cost_per_transcription_kobo=t.cost_per_transcription_kobo,
+        cost_per_scan_unlock_kobo=t.cost_per_scan_unlock_kobo,
+        cost_per_skin_analysis_kobo=t.cost_per_skin_analysis_kobo,
+        signup_bonus_naira=t.signup_bonus_kobo / 100.0,
+        referral_bonus_naira=t.referral_bonus_kobo / 100.0,
+        cost_per_chat_naira=t.cost_per_chat_kobo / 100.0,
+        cost_per_file_upload_naira=t.cost_per_file_upload_kobo / 100.0,
+        cost_per_transcription_naira=t.cost_per_transcription_kobo / 100.0,
+        cost_per_scan_unlock_naira=t.cost_per_scan_unlock_kobo / 100.0,
+        cost_per_skin_analysis_naira=t.cost_per_skin_analysis_kobo / 100.0,
+    )
+
+
+@router.get("/tariffs", response_model=TariffResponse)
+async def admin_get_tariffs(
+    _admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> TariffResponse:
+    tariff = await get_tariffs(db)
+    return _tariff_to_response(tariff)
+
+
+@router.put("/tariffs", response_model=TariffResponse)
+async def admin_update_tariffs(
+    body: TariffUpdate,
+    _admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> TariffResponse:
+    tariff = await get_tariffs(db)
+
+    for field in (
+        "signup_bonus_kobo",
+        "referral_bonus_kobo",
+        "cost_per_chat_kobo",
+        "cost_per_file_upload_kobo",
+        "cost_per_transcription_kobo",
+        "cost_per_scan_unlock_kobo",
+        "cost_per_skin_analysis_kobo",
+    ):
+        value = getattr(body, field, None)
+        if value is not None:
+            setattr(tariff, field, value)
+
+    await db.commit()
+    await db.refresh(tariff)
+    return _tariff_to_response(tariff)

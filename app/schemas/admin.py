@@ -9,6 +9,7 @@ class AdminStatsResponse(BaseModel):
     total_users: int
     total_scans: int
     total_revenue_kobo: int  # sum of all top-ups
+    total_bonuses_kobo: int  # sum of all signup bonuses given out
     active_users_7d: int
     new_users_7d: int
 
@@ -151,3 +152,34 @@ class PromoCodeResponse(BaseModel):
 class PromoCodeListResponse(BaseModel):
     promo_codes: list[PromoCodeResponse]
     total: int
+
+
+# ── Tariffs ───────────────────────────────────────────
+
+class TariffResponse(BaseModel):
+    signup_bonus_kobo: int
+    referral_bonus_kobo: int
+    cost_per_chat_kobo: int
+    cost_per_file_upload_kobo: int
+    cost_per_transcription_kobo: int
+    cost_per_scan_unlock_kobo: int
+    cost_per_skin_analysis_kobo: int
+
+    # Convenience naira values
+    signup_bonus_naira: float = 0
+    referral_bonus_naira: float = 0
+    cost_per_chat_naira: float = 0
+    cost_per_file_upload_naira: float = 0
+    cost_per_transcription_naira: float = 0
+    cost_per_scan_unlock_naira: float = 0
+    cost_per_skin_analysis_naira: float = 0
+
+
+class TariffUpdate(BaseModel):
+    signup_bonus_kobo: int | None = None
+    referral_bonus_kobo: int | None = None
+    cost_per_chat_kobo: int | None = None
+    cost_per_file_upload_kobo: int | None = None
+    cost_per_transcription_kobo: int | None = None
+    cost_per_scan_unlock_kobo: int | None = None
+    cost_per_skin_analysis_kobo: int | None = None

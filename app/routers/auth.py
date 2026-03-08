@@ -21,6 +21,7 @@ from app.middleware.auth import get_current_user
 from app.models import CreditTransaction, User
 from app.schemas.auth import MeResponse, TokenResponse, UserProfile
 from app.services import email as email_svc
+from app.services.tariff_loader import get_tariffs
 from app.utils.jwt import create_access_token
 
 logger = logging.getLogger(__name__)
@@ -151,7 +152,8 @@ async def clerk_sign_in(request: Request, db: AsyncSession = Depends(get_db)) ->
     if is_new:
         # Credits are set atomically with user creation — if the row is
         # created, the bonus is guaranteed to be there.
-        bonus = settings.INITIAL_SIGNUP_BONUS_KOBO
+        tariffs = await get_tariffs(db)
+        bonus = tariffs.signup_bonus_kobo
         user = User(
             email=email,
             phone=phone,

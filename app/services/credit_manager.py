@@ -6,23 +6,26 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.models import CreditTransaction, Scan, User
+from app.models.tariff import Tariff
 from app.services.notification_service import NotificationService
+from app.services.tariff_loader import get_tariffs
 
 
 class CreditManager:
     """Manages credit balance and credit transaction records.
 
-    Pricing (kobo):
-      - Scan unlock:         ₦200  (20 000 kobo)
-      - Chat message:        ₦50   ( 5 000 kobo)
-      - Skin analysis:       ₦250  (25 000 kobo)  — paid users only
-      - Voice transcription:  ₦100  (10 000 kobo)  — paid users only
+    Pricing is loaded from the tariffs table (admin-configurable).
     """
 
     def __init__(self, db: AsyncSession):
         self.db = db
+        self._tariffs: Tariff | None = None
+
+    async def _get_tariffs(self) -> Tariff:
+        if self._tariffs is None:
+            self._tariffs = await get_tariffs(self.db)
+        return self._tariffs
 
     # ------------------------------------------------------------------
     # Helpers
@@ -41,7 +44,7 @@ class CreditManager:
         return int(credits)
 
     # ------------------------------------------------------------------
-    # Scan unlock  (₦200 — everyone)
+    # Scan unlock  (admin-configurable — default ₦200)
     # ------------------------------------------------------------------
 
     async def require_and_deduct_for_full_scan(self, *, user: User, scan: Scan) -> dict | None:
@@ -56,7 +59,8 @@ class CreditManager:
         if scan.user_id != user.id:
             raise HTTPException(status_code=403, detail="Scan does not belong to current user")
 
-        cost = settings.PRICE_SCAN_UNLOCK_KOBO
+        tariffs = await self._get_tariffs()
+        cost = tariffs.cost_per_scan_unlock_kobo
         if user.credits < cost:
             raise HTTPException(status_code=402, detail="Insufficient balance")
 
@@ -87,11 +91,12 @@ class CreditManager:
         return {"amount_deducted_kobo": cost, "balance_after_kobo": user.credits}
 
     # ------------------------------------------------------------------
-    # Chat message  (₦50 — everyone)
+    # Chat message  (admin-configurable — default ₦50)
     # ------------------------------------------------------------------
 
     async def deduct_for_chat(self, *, user: User, scan_id: uuid.UUID) -> None:
-        cost = settings.PRICE_CHAT_MESSAGE_KOBO
+        tariffs = await self._get_tariffs()
+        cost = tariffs.cost_per_chat_kobo
         if user.credits < cost:
             raise HTTPException(status_code=402, detail="Insufficient balance for chat message")
 
@@ -115,7 +120,64 @@ class CreditManager:
         await self.db.refresh(user)
 
     # ------------------------------------------------------------------
-    # Skin analysis  (₦250 — paid users only)
+    # Skin chat message  (same price as blood chat, separate reason)
+    # ------------------------------------------------------------------
+
+    async def deduct_for_skin_chat(self, *, user: User, skin_analysis_id: uuid.UUID) -> None:
+        tariffs = await self._get_tariffs()
+        cost = tariffs.cost_per_chat_kobo
+        if user.credits < cost:
+            raise HTTPException(status_code=402, detail="Insufficient balance for chat message")
+
+        user.credits -= cost
+        self.db.add(
+            CreditTransaction(
+                user_id=user.id,
+                amount=-cost,
+                reason="skin_chat_used",
+            )
+        )
+        await NotificationService(self.db).create(
+            user_id=user.id,
+            type="credit_deducted",
+            title="Skin Chat Message",
+            body=f"₦{cost // 100} deducted for a skin chat message.",
+            ref_id=str(skin_analysis_id),
+        )
+        await self.db.commit()
+        await self.db.refresh(user)
+
+    # ------------------------------------------------------------------
+    # File upload in chat  (admin-configurable — default ₦50)
+    # ------------------------------------------------------------------
+
+    async def deduct_for_file_upload(self, *, user: User, scan_id: uuid.UUID) -> None:
+        tariffs = await self._get_tariffs()
+        cost = tariffs.cost_per_file_upload_kobo
+        if user.credits < cost:
+            raise HTTPException(status_code=402, detail="Insufficient balance for file upload")
+
+        user.credits -= cost
+        self.db.add(
+            CreditTransaction(
+                user_id=user.id,
+                amount=-cost,
+                reason="file_upload",
+                scan_id=scan_id,
+            )
+        )
+        await NotificationService(self.db).create(
+            user_id=user.id,
+            type="credit_deducted",
+            title="File Upload",
+            body=f"₦{cost // 100} deducted for file upload in chat.",
+            ref_id=str(scan_id),
+        )
+        await self.db.commit()
+        await self.db.refresh(user)
+
+    # ------------------------------------------------------------------
+    # Skin analysis  (admin-configurable — default ₦250, paid users only)
     # ------------------------------------------------------------------
 
     async def deduct_for_skin_analysis(self, *, user: User) -> None:
@@ -125,7 +187,8 @@ class CreditManager:
                 detail="Skin analysis requires a funded account. Top up to unlock.",
             )
 
-        cost = settings.PRICE_SKIN_ANALYSIS_KOBO
+        tariffs = await self._get_tariffs()
+        cost = tariffs.cost_per_skin_analysis_kobo
         if user.credits < cost:
             raise HTTPException(status_code=402, detail="Insufficient balance for skin analysis")
 
@@ -147,7 +210,7 @@ class CreditManager:
         await self.db.refresh(user)
 
     # ------------------------------------------------------------------
-    # Voice transcription  (₦100 — paid users only)
+    # Voice transcription  (admin-configurable — default ₦100, paid users only)
     # ------------------------------------------------------------------
 
     async def deduct_for_voice(self, *, user: User, scan_id: uuid.UUID | None = None) -> None:
@@ -157,7 +220,8 @@ class CreditManager:
                 detail="Voice transcription requires a funded account. Top up to unlock.",
             )
 
-        cost = settings.PRICE_VOICE_TRANSCRIPTION_KOBO
+        tariffs = await self._get_tariffs()
+        cost = tariffs.cost_per_transcription_kobo
         if user.credits < cost:
             raise HTTPException(status_code=402, detail="Insufficient balance for voice transcription")
 
