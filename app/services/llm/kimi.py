@@ -275,13 +275,21 @@ class KimiProvider:
         content = data["choices"][0]["message"]["content"]
         return _extract_json(content)
 
-    async def chat(self, *, messages: list[dict], scan_context: str, mode: str = "blood") -> str:
-        """Chat about a scan report.
+    async def chat(
+        self,
+        *,
+        messages: list[dict],
+        scan_context: str,
+        mode: str = "blood",
+        system_prompt_override: str | None = None,
+    ) -> str:
+        """Chat about a scan report or handle support queries.
 
         Args:
             messages: OpenAI-style messages (role/content), excluding system prompt.
             scan_context: Full report context to ground the assistant.
-            mode: "blood" for lab results chat, "skin" for dermatology chat.
+            mode: "blood" for lab results chat, "skin" for dermatology chat, "support" for platform support.
+            system_prompt_override: If provided, use this instead of the built-in prompts.
         """
 
         base_url = settings.NVIDIA_NIM_BASE_URL or self.BASE_URL
@@ -293,14 +301,20 @@ class KimiProvider:
                 "Please consult a healthcare provider for medical decisions."
             )
 
-        system_prompt = SKIN_CHAT_SYSTEM_PROMPT if mode == "skin" else CHAT_SYSTEM_PROMPT
+        if system_prompt_override:
+            system_prompt = system_prompt_override
+        elif mode == "skin":
+            system_prompt = SKIN_CHAT_SYSTEM_PROMPT
+        else:
+            system_prompt = CHAT_SYSTEM_PROMPT
 
         # Prepend context as a user-visible instruction so the model always sees it.
+        context_label = "Reference information" if mode == "support" else "Report context"
         grounded_messages = [
             {"role": "system", "content": system_prompt},
             {
                 "role": "user",
-                "content": f"Report context:\n{scan_context}",
+                "content": f"{context_label}:\n{scan_context}",
             },
         ]
 

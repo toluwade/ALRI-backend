@@ -10,6 +10,7 @@ from app.models.voice import VoiceTranscription
 from app.models.notification import Notification
 from app.models.promo import PromoCode, PromoRedemption
 from app.models.tariff import Tariff
+from app.models.support_ticket import SupportTicket
 
 __all__ = [
     "User",
@@ -25,4 +26,5 @@ __all__ = [
     "PromoCode",
     "PromoRedemption",
     "Tariff",
+    "SupportTicket",
 ]

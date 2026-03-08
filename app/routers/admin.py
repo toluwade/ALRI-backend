@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.middleware.auth import get_admin_user
-from app.models import CreditTransaction, PromoCode, PromoRedemption, Scan, SkinAnalysis, User
+from app.models import CreditTransaction, PromoCode, PromoRedemption, Scan, SkinAnalysis, SupportTicket, User
 from app.models.tariff import Tariff
 from app.schemas.admin import (
     AdminNotificationItem,
@@ -23,6 +23,10 @@ from app.schemas.admin import (
     AdminSkinAnalysisItem,
     AdminSkinAnalysisListResponse,
     AdminStatsResponse,
+    AdminTicketDetail,
+    AdminTicketItem,
+    AdminTicketListResponse,
+    AdminTicketUpdate,
     AdminTransactionItem,
     AdminTransactionListResponse,
     AdminUserDetail,
@@ -39,6 +43,8 @@ from app.schemas.admin import (
     TariffResponse,
     TariffUpdate,
 )
+from app.services.email import send_support_response
+from app.services.notification_service import NotificationService
 from app.services.tariff_loader import get_tariffs
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -638,6 +644,174 @@ async def admin_update_tariffs(
     return _tariff_to_response(tariff)
 
 
+# ── Support Tickets ───────────────────────────────────
+
+def _iso(dt: object) -> str:
+    return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
+
+
+@router.get("/tickets", response_model=AdminTicketListResponse)
+async def admin_list_tickets(
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    type: str | None = Query(default=None),
+    priority: str | None = Query(default=None),
+    _admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> AdminTicketListResponse:
+    filters = []
+    if status:
+        filters.append(SupportTicket.status == status)
+    if category:
+        filters.append(SupportTicket.category == category)
+    if type:
+        filters.append(SupportTicket.type == type)
+    if priority:
+        filters.append(SupportTicket.priority == priority)
+
+    count_q = select(func.count()).select_from(SupportTicket)
+    if filters:
+        count_q = count_q.where(*filters)
+    total = (await db.execute(count_q)).scalar_one()
+
+    offset = (page - 1) * per_page
+    query = select(SupportTicket).order_by(SupportTicket.created_at.desc()).offset(offset).limit(per_page)
+    if filters:
+        query = query.where(*filters)
+    tickets = (await db.execute(query)).scalars().all()
+
+    # Batch-load user emails
+    user_ids = list({t.user_id for t in tickets})
+    user_map: dict[uuid.UUID, str | None] = {}
+    if user_ids:
+        rows = (await db.execute(select(User.id, User.email).where(User.id.in_(user_ids)))).all()
+        user_map = {uid: email for uid, email in rows}
+
+    return AdminTicketListResponse(
+        tickets=[
+            AdminTicketItem(
+                id=str(t.id),
+                user_id=str(t.user_id),
+                user_email=user_map.get(t.user_id),
+                category=t.category,
+                type=t.type,
+                subject=t.subject,
+                status=t.status,
+                priority=t.priority,
+                rating=t.rating,
+                created_at=_iso(t.created_at),
+            )
+            for t in tickets
+        ],
+        total=int(total),
+        page=page,
+        per_page=per_page,
+    )
+
+
+@router.get("/tickets/{ticket_id}", response_model=AdminTicketDetail)
+async def admin_get_ticket(
+    ticket_id: uuid.UUID,
+    _admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> AdminTicketDetail:
+    ticket = (
+        await db.execute(select(SupportTicket).where(SupportTicket.id == ticket_id))
+    ).scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    # Get user email
+    user = (await db.execute(select(User.email).where(User.id == ticket.user_id))).scalar_one_or_none()
+
+    return AdminTicketDetail(
+        id=str(ticket.id),
+        user_id=str(ticket.user_id),
+        user_email=user,
+        category=ticket.category,
+        type=ticket.type,
+        subject=ticket.subject,
+        body=ticket.body,
+        status=ticket.status,
+        priority=ticket.priority,
+        admin_response=ticket.admin_response,
+        responded_by=str(ticket.responded_by) if ticket.responded_by else None,
+        responded_at=_iso(ticket.responded_at) if ticket.responded_at else None,
+        rating=ticket.rating,
+        created_at=_iso(ticket.created_at),
+        updated_at=_iso(ticket.updated_at),
+    )
+
+
+@router.patch("/tickets/{ticket_id}", response_model=AdminTicketDetail)
+async def admin_update_ticket(
+    ticket_id: uuid.UUID,
+    body: AdminTicketUpdate,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> AdminTicketDetail:
+    ticket = (
+        await db.execute(select(SupportTicket).where(SupportTicket.id == ticket_id))
+    ).scalar_one_or_none()
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    if body.status is not None:
+        ticket.status = body.status
+    if body.priority is not None:
+        ticket.priority = body.priority
+    if body.admin_response is not None:
+        ticket.admin_response = body.admin_response
+        ticket.responded_by = admin.id
+        ticket.responded_at = datetime.now(timezone.utc)
+
+    await db.commit()
+    await db.refresh(ticket)
+
+    # If admin responded, notify user + send email
+    if body.admin_response is not None:
+        try:
+            await NotificationService(db).create(
+                user_id=ticket.user_id,
+                type="support_ticket",
+                title="Support ticket updated",
+                body=f"An admin responded to your ticket: {ticket.subject}",
+                ref_id=str(ticket.id),
+            )
+        except Exception:
+            pass
+
+        try:
+            user_row = (await db.execute(select(User.email).where(User.id == ticket.user_id))).scalar_one_or_none()
+            if user_row:
+                await send_support_response(user_row, ticket.subject, body.admin_response)
+        except Exception:
+            pass
+
+    # Get user email for response
+    user_email = (await db.execute(select(User.email).where(User.id == ticket.user_id))).scalar_one_or_none()
+
+    return AdminTicketDetail(
+        id=str(ticket.id),
+        user_id=str(ticket.user_id),
+        user_email=user_email,
+        category=ticket.category,
+        type=ticket.type,
+        subject=ticket.subject,
+        body=ticket.body,
+        status=ticket.status,
+        priority=ticket.priority,
+        admin_response=ticket.admin_response,
+        responded_by=str(ticket.responded_by) if ticket.responded_by else None,
+        responded_at=_iso(ticket.responded_at) if ticket.responded_at else None,
+        rating=ticket.rating,
+        created_at=_iso(ticket.created_at),
+        updated_at=_iso(ticket.updated_at),
+    )
+
+
 # ── Notifications (recent activity feed) ──────────────
 
 @router.get("/notifications", response_model=AdminNotificationsResponse)
@@ -738,6 +912,29 @@ async def admin_notifications(
             title="Skin analysis completed",
             description=skin_user_map.get(sa.user_id) or "Unknown user",
             created_at=sa.created_at.isoformat() if hasattr(sa.created_at, "isoformat") else str(sa.created_at),
+        ))
+
+    # 5) New support tickets
+    tickets = (
+        await db.execute(
+            select(SupportTicket)
+            .where(SupportTicket.created_at >= cutoff)
+            .order_by(SupportTicket.created_at.desc())
+            .limit(50)
+        )
+    ).scalars().all()
+    ticket_user_ids = list({t.user_id for t in tickets})
+    ticket_user_map: dict[uuid.UUID, str | None] = {}
+    if ticket_user_ids:
+        rows = (await db.execute(select(User.id, User.email).where(User.id.in_(ticket_user_ids)))).all()
+        ticket_user_map = {uid: email for uid, email in rows}
+    for t in tickets:
+        items.append(AdminNotificationItem(
+            id=str(t.id),
+            type="support_ticket",
+            title=f"New {t.type.replace('_', ' ')} — {t.category.replace('_', ' ')}",
+            description=ticket_user_map.get(t.user_id) or "Unknown user",
+            created_at=_iso(t.created_at),
         ))
 
     # Sort all items by created_at descending

@@ -184,6 +184,36 @@ async def send_report(to: str, scan_id: str, summary: str) -> dict | None:
 # Payment receipt
 # ---------------------------------------------------------------------------
 
+async def send_support_response(to: str, subject: str, admin_response: str) -> dict | None:
+    """Notify user that an admin responded to their support ticket."""
+    safe_response = admin_response.replace("<", "&lt;").replace(">", "&gt;")
+    safe_subject = subject.replace("<", "&lt;").replace(">", "&gt;")
+    body = f"""\
+<h2 style="margin:0 0 8px;font-size:20px;color:{_TEXT};">Support Ticket Update</h2>
+<p style="margin:0 0 20px;color:{_MUTED};font-size:14px;">We've responded to your ticket</p>
+
+<table cellpadding="0" cellspacing="0" role="presentation"
+       style="width:100%;background:{_BG};border:1px solid #F2F4F7;border-radius:12px;margin:16px 0;">
+<tr><td style="padding:16px 20px;">
+  <p style="margin:0 0 8px;font-size:13px;color:{_MUTED};">Subject</p>
+  <p style="margin:0 0 16px;font-size:14px;color:{_TEXT};font-weight:600;">{safe_subject}</p>
+  <p style="margin:0 0 8px;font-size:13px;color:{_MUTED};">Our Response</p>
+  <p style="margin:0;font-size:14px;color:{_TEXT};line-height:1.6;">{safe_response}</p>
+</td></tr>
+</table>
+
+<p style="font-size:13px;color:{_MUTED};">You can view your ticket and rate our response from your dashboard.</p>
+
+{_button(settings.APP_URL + "/dashboard/support", "View My Tickets")}"""
+
+    return await _send(
+        f"ALRI Support <{settings.RESEND_FROM_HELLO}>",
+        to,
+        f"Re: {subject}",
+        _base(body),
+    )
+
+
 async def send_payment_receipt(
     to: str, amount: int, currency: str = "NGN"
 ) -> dict | None:

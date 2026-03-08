@@ -227,3 +227,39 @@ class AdminNotificationItem(BaseModel):
 class AdminNotificationsResponse(BaseModel):
     notifications: list[AdminNotificationItem]
     total: int
+
+
+# ── Support Tickets ──────────────────────────────────
+
+class AdminTicketItem(BaseModel):
+    id: str
+    user_id: str
+    user_email: str | None
+    category: str
+    type: str
+    subject: str
+    status: str
+    priority: str
+    rating: int | None
+    created_at: str
+
+
+class AdminTicketDetail(AdminTicketItem):
+    body: str
+    admin_response: str | None
+    responded_by: str | None
+    responded_at: str | None
+    updated_at: str
+
+
+class AdminTicketListResponse(BaseModel):
+    tickets: list[AdminTicketItem]
+    total: int
+    page: int
+    per_page: int
+
+
+class AdminTicketUpdate(BaseModel):
+    status: str | None = None
+    priority: str | None = None
+    admin_response: str | None = None
