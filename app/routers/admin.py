@@ -13,11 +13,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.middleware.auth import get_admin_user
-from app.models import CreditTransaction, PromoCode, PromoRedemption, Scan, User
+from app.models import CreditTransaction, PromoCode, PromoRedemption, Scan, SkinAnalysis, User
 from app.models.tariff import Tariff
 from app.schemas.admin import (
+    AdminNotificationItem,
+    AdminNotificationsResponse,
     AdminScanItem,
     AdminScanListResponse,
+    AdminSkinAnalysisItem,
+    AdminSkinAnalysisListResponse,
     AdminStatsResponse,
     AdminTransactionItem,
     AdminTransactionListResponse,
@@ -25,6 +29,7 @@ from app.schemas.admin import (
     AdminUserItem,
     AdminUserListResponse,
     AdminUserScanItem,
+    AdminUserSkinAnalysisItem,
     AdminUserTransactionItem,
     AdminUserUpdate,
     PromoCodeCreate,
@@ -44,6 +49,7 @@ _REASON_MAP: dict[str, tuple[str, str]] = {
     "scan_used": ("deduction", "Scan Unlock"),
     "chat_used": ("deduction", "Chat Message"),
     "skin_analysis": ("deduction", "Skin Analysis"),
+    "skin_chat_used": ("deduction", "Skin Chat Message"),
     "voice_used": ("deduction", "Voice Transcription"),
     "file_upload": ("deduction", "File Upload"),
     "grant": ("reward", "Credit Bonus"),
@@ -76,6 +82,7 @@ async def admin_stats(
 
     total_users = (await db.execute(select(func.count()).select_from(User))).scalar_one()
     total_scans = (await db.execute(select(func.count()).select_from(Scan))).scalar_one()
+    total_skin_analyses = (await db.execute(select(func.count()).select_from(SkinAnalysis))).scalar_one()
 
     # Revenue = sum of all successful paystack top-ups
     total_revenue = (
@@ -112,6 +119,7 @@ async def admin_stats(
     return AdminStatsResponse(
         total_users=int(total_users),
         total_scans=int(total_scans),
+        total_skin_analyses=int(total_skin_analyses),
         total_revenue_kobo=int(total_revenue),
         total_bonuses_kobo=int(total_bonuses),
         active_users_7d=int(active_users_7d),
@@ -184,6 +192,16 @@ async def admin_get_user(
         )
     ).scalars().all()
 
+    # Recent skin analyses
+    skin_analyses = (
+        await db.execute(
+            select(SkinAnalysis)
+            .where(SkinAnalysis.user_id == user.id)
+            .order_by(SkinAnalysis.created_at.desc())
+            .limit(20)
+        )
+    ).scalars().all()
+
     # Recent transactions
     txns = (
         await db.execute(
@@ -193,6 +211,18 @@ async def admin_get_user(
             .limit(20)
         )
     ).scalars().all()
+
+    def _skin_conditions(sa: SkinAnalysis) -> list[str]:
+        r = sa.analysis_result
+        if not r or not isinstance(r, dict):
+            return []
+        return [c.get("name", "") for c in r.get("conditions", []) if c.get("name")]
+
+    def _skin_severity(sa: SkinAnalysis) -> str | None:
+        r = sa.analysis_result
+        if not r or not isinstance(r, dict):
+            return None
+        return r.get("severity")
 
     return AdminUserDetail(
         id=str(user.id),
@@ -217,6 +247,16 @@ async def admin_get_user(
                 created_at=s.created_at.isoformat() if hasattr(s.created_at, "isoformat") else str(s.created_at),
             )
             for s in scans
+        ],
+        skin_analyses=[
+            AdminUserSkinAnalysisItem(
+                id=str(sa.id),
+                status=sa.status or "processing",
+                severity=_skin_severity(sa),
+                condition_names=_skin_conditions(sa),
+                created_at=sa.created_at.isoformat() if hasattr(sa.created_at, "isoformat") else str(sa.created_at),
+            )
+            for sa in skin_analyses
         ],
         transactions=[
             AdminUserTransactionItem(
@@ -384,6 +424,60 @@ async def admin_list_scans(
     return AdminScanListResponse(scans=items, total=int(total), page=page, per_page=per_page)
 
 
+# ── Skin Analyses ─────────────────────────────────────
+
+@router.get("/skin-analyses", response_model=AdminSkinAnalysisListResponse)
+async def admin_list_skin_analyses(
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=20, ge=1, le=100),
+    status: str | None = Query(default=None),
+    _admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> AdminSkinAnalysisListResponse:
+    filters = []
+    if status:
+        filters.append(SkinAnalysis.status == status)
+
+    total = (
+        await db.execute(
+            select(func.count()).select_from(SkinAnalysis).where(*filters)
+            if filters
+            else select(func.count()).select_from(SkinAnalysis)
+        )
+    ).scalar_one()
+
+    offset = (page - 1) * per_page
+    query = select(SkinAnalysis).order_by(SkinAnalysis.created_at.desc()).offset(offset).limit(per_page)
+    if filters:
+        query = query.where(*filters)
+    analyses = (await db.execute(query)).scalars().all()
+
+    # Batch-load user emails
+    user_ids = list({sa.user_id for sa in analyses})
+    user_map: dict[uuid.UUID, str | None] = {}
+    if user_ids:
+        users = (await db.execute(select(User.id, User.email).where(User.id.in_(user_ids)))).all()
+        user_map = {uid: email for uid, email in users}
+
+    items = []
+    for sa in analyses:
+        result = sa.analysis_result or {}
+        conditions = [c.get("name", "") for c in result.get("conditions", []) if c.get("name")]
+        items.append(
+            AdminSkinAnalysisItem(
+                id=str(sa.id),
+                user_id=str(sa.user_id),
+                user_email=user_map.get(sa.user_id),
+                status=sa.status or "processing",
+                severity=result.get("severity"),
+                condition_names=conditions,
+                created_at=sa.created_at.isoformat() if hasattr(sa.created_at, "isoformat") else str(sa.created_at),
+            )
+        )
+
+    return AdminSkinAnalysisListResponse(analyses=items, total=int(total), page=page, per_page=per_page)
+
+
 # ── Promo Codes ────────────────────────────────────────
 
 def _promo_to_response(p: PromoCode) -> PromoCodeResponse:
@@ -542,3 +636,114 @@ async def admin_update_tariffs(
     await db.commit()
     await db.refresh(tariff)
     return _tariff_to_response(tariff)
+
+
+# ── Notifications (recent activity feed) ──────────────
+
+@router.get("/notifications", response_model=AdminNotificationsResponse)
+async def admin_notifications(
+    _admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+) -> AdminNotificationsResponse:
+    """Return recent platform activity as notification items (last 48 hours)."""
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=48)
+    items: list[AdminNotificationItem] = []
+
+    # 1) New user signups
+    new_users = (
+        await db.execute(
+            select(User)
+            .where(User.created_at >= cutoff)
+            .order_by(User.created_at.desc())
+            .limit(50)
+        )
+    ).scalars().all()
+    for u in new_users:
+        items.append(AdminNotificationItem(
+            id=str(u.id),
+            type="new_user",
+            title=f"New user signed up",
+            description=u.email or u.name or "Anonymous",
+            created_at=u.created_at.isoformat() if hasattr(u.created_at, "isoformat") else str(u.created_at),
+        ))
+
+    # 2) Payments (successful top-ups)
+    payments = (
+        await db.execute(
+            select(CreditTransaction)
+            .where(
+                CreditTransaction.created_at >= cutoff,
+                CreditTransaction.reason.startswith("paystack_success:"),
+            )
+            .order_by(CreditTransaction.created_at.desc())
+            .limit(50)
+        )
+    ).scalars().all()
+    pay_user_ids = list({p.user_id for p in payments})
+    pay_user_map: dict[uuid.UUID, str | None] = {}
+    if pay_user_ids:
+        rows = (await db.execute(select(User.id, User.email).where(User.id.in_(pay_user_ids)))).all()
+        pay_user_map = {uid: email for uid, email in rows}
+    for p in payments:
+        naira = p.amount / 100
+        items.append(AdminNotificationItem(
+            id=str(p.id),
+            type="payment",
+            title=f"Payment received — \u20a6{naira:,.0f}",
+            description=pay_user_map.get(p.user_id) or "Unknown user",
+            created_at=p.created_at.isoformat() if hasattr(p.created_at, "isoformat") else str(p.created_at),
+        ))
+
+    # 3) Completed scans
+    scans = (
+        await db.execute(
+            select(Scan)
+            .where(Scan.created_at >= cutoff, Scan.status == "completed")
+            .order_by(Scan.created_at.desc())
+            .limit(50)
+        )
+    ).scalars().all()
+    scan_user_ids = list({s.user_id for s in scans if s.user_id})
+    scan_user_map: dict[uuid.UUID, str | None] = {}
+    if scan_user_ids:
+        rows = (await db.execute(select(User.id, User.email).where(User.id.in_(scan_user_ids)))).all()
+        scan_user_map = {uid: email for uid, email in rows}
+    for s in scans:
+        items.append(AdminNotificationItem(
+            id=str(s.id),
+            type="scan_completed",
+            title="Lab scan completed",
+            description=scan_user_map.get(s.user_id) or "Unknown user" if s.user_id else "Unknown user",
+            created_at=s.created_at.isoformat() if hasattr(s.created_at, "isoformat") else str(s.created_at),
+        ))
+
+    # 4) Completed skin analyses
+    skin = (
+        await db.execute(
+            select(SkinAnalysis)
+            .where(SkinAnalysis.created_at >= cutoff, SkinAnalysis.status == "completed")
+            .order_by(SkinAnalysis.created_at.desc())
+            .limit(50)
+        )
+    ).scalars().all()
+    skin_user_ids = list({sa.user_id for sa in skin})
+    skin_user_map: dict[uuid.UUID, str | None] = {}
+    if skin_user_ids:
+        rows = (await db.execute(select(User.id, User.email).where(User.id.in_(skin_user_ids)))).all()
+        skin_user_map = {uid: email for uid, email in rows}
+    for sa in skin:
+        items.append(AdminNotificationItem(
+            id=str(sa.id),
+            type="skin_analysis",
+            title="Skin analysis completed",
+            description=skin_user_map.get(sa.user_id) or "Unknown user",
+            created_at=sa.created_at.isoformat() if hasattr(sa.created_at, "isoformat") else str(sa.created_at),
+        ))
+
+    # Sort all items by created_at descending
+    items.sort(key=lambda x: x.created_at, reverse=True)
+
+    return AdminNotificationsResponse(
+        notifications=items[:50],
+        total=len(items),
+    )

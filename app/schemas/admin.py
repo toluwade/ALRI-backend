@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 class AdminStatsResponse(BaseModel):
     total_users: int
     total_scans: int
+    total_skin_analyses: int
     total_revenue_kobo: int  # sum of all top-ups
     total_bonuses_kobo: int  # sum of all signup bonuses given out
     active_users_7d: int
@@ -51,7 +52,16 @@ class AdminUserDetail(BaseModel):
     created_at: str
 
     scans: list[AdminUserScanItem] = []
+    skin_analyses: list[AdminUserSkinAnalysisItem] = []
     transactions: list[AdminUserTransactionItem] = []
+
+
+class AdminUserSkinAnalysisItem(BaseModel):
+    id: str
+    status: str
+    severity: str | None
+    condition_names: list[str]
+    created_at: str
 
 
 class AdminUserScanItem(BaseModel):
@@ -121,6 +131,25 @@ class AdminScanListResponse(BaseModel):
     per_page: int
 
 
+# ── Skin Analyses ─────────────────────────────────────
+
+class AdminSkinAnalysisItem(BaseModel):
+    id: str
+    user_id: str
+    user_email: str | None
+    status: str
+    severity: str | None
+    condition_names: list[str]
+    created_at: str
+
+
+class AdminSkinAnalysisListResponse(BaseModel):
+    analyses: list[AdminSkinAnalysisItem]
+    total: int
+    page: int
+    per_page: int
+
+
 # ── Promo Codes ────────────────────────────────────────
 
 class PromoCodeCreate(BaseModel):
@@ -183,3 +212,18 @@ class TariffUpdate(BaseModel):
     cost_per_transcription_kobo: int | None = None
     cost_per_scan_unlock_kobo: int | None = None
     cost_per_skin_analysis_kobo: int | None = None
+
+
+# ── Notifications ────────────────────────────────────
+
+class AdminNotificationItem(BaseModel):
+    id: str
+    type: str  # new_user, payment, scan_completed, skin_analysis
+    title: str
+    description: str
+    created_at: str
+
+
+class AdminNotificationsResponse(BaseModel):
+    notifications: list[AdminNotificationItem]
+    total: int
