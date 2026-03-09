@@ -52,6 +52,8 @@ def _to_profile(u: User) -> UserProfile:
         auth_provider=u.auth_provider,
         age=u.age,
         sex=u.sex,
+        weight_kg=u.weight_kg,
+        height_cm=u.height_cm,
         credits=u.credits,
     )
 

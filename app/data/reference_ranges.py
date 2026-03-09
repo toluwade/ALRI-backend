@@ -75,8 +75,50 @@ REFERENCE_RANGES: dict[str, dict] = {
 }
 
 
+# Common alternative names found on real lab reports → our canonical keys
+_ALIASES: dict[str, str] = {
+    # Liver
+    "ast/got": "ast", "sgot": "ast", "got": "ast", "aspartate_aminotransferase": "ast",
+    "alt/gpt": "alt", "sgpt": "alt", "gpt": "alt", "alanine_aminotransferase": "alt",
+    "alkaline_phosphatase": "alp",
+    "total_bilirubin": "bilirubin_total", "t._bilirubin": "bilirubin_total", "t_bil": "bilirubin_total", "tbil": "bilirubin_total",
+    "direct_bilirubin": "bilirubin_direct", "d._bilirubin": "bilirubin_direct", "d_bil": "bilirubin_direct", "dbil": "bilirubin_direct", "conjugated_bilirubin": "bilirubin_direct",
+    "indirect_bilirubin": "bilirubin_total",  # close-enough fallback
+    # CBC
+    "white_blood_cell": "wbc", "white_blood_cells": "wbc", "wbc_count": "wbc",
+    "red_blood_cell": "rbc", "red_blood_cells": "rbc", "rbc_count": "rbc",
+    "platelet_count": "platelets", "plt": "platelets",
+    "haemoglobin": "hemoglobin", "hgb": "hemoglobin", "hb": "hemoglobin",
+    "haematocrit": "hematocrit", "hct": "hematocrit", "packed_cell_volume": "hematocrit", "pcv": "hematocrit",
+    "mean_corpuscular_volume": "mcv",
+    "mean_corpuscular_hemoglobin": "mch",
+    "red_cell_distribution_width": "rdw",
+    # Metabolic
+    "blood_urea_nitrogen": "bun", "urea": "bun",
+    "fasting_glucose": "glucose_fasting", "fasting_blood_sugar": "glucose_fasting", "fbs": "glucose_fasting",
+    "random_blood_sugar": "glucose", "rbs": "glucose", "blood_sugar": "glucose", "blood_glucose": "glucose",
+    # Lipid
+    "cholesterol": "total_cholesterol", "t._cholesterol": "total_cholesterol",
+    "ldl_cholesterol": "ldl", "ldl_c": "ldl",
+    "hdl_cholesterol": "hdl", "hdl_c": "hdl",
+    # Thyroid
+    "thyroid_stimulating_hormone": "tsh",
+    "ft4": "free_t4", "free_thyroxine": "free_t4",
+    "ft3": "free_t3", "free_triiodothyronine": "free_t3",
+    # Other
+    "hemoglobin_a1c": "hba1c", "glycated_hemoglobin": "hba1c", "a1c": "hba1c",
+    "c_reactive_protein": "crp", "hs_crp": "crp",
+    "erythrocyte_sedimentation_rate": "esr",
+    "prostate_specific_antigen": "psa",
+    "25_hydroxy_vitamin_d": "vitamin_d", "vit_d": "vitamin_d",
+    "vit_b12": "vitamin_b12",
+}
+
+
 def canonicalize(name: str) -> str:
-    return name.strip().lower().replace(" ", "_").replace("-", "_")
+    key = name.strip().lower().replace(" ", "_").replace("-", "_").replace("/", "/")
+    # Try alias lookup first (handles "ast/got" → "ast", "total_bilirubin" → "bilirubin_total", etc.)
+    return _ALIASES.get(key, key)
 
 
 # Age-specific adjustments for key markers (pediatric <18, elderly >=65)

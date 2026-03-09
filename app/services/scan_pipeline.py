@@ -4,7 +4,10 @@ import json
 import logging
 import os
 import re
+import subprocess
+import tempfile
 import uuid
+from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -41,30 +44,104 @@ def _safe_float(x) -> float | None:
         return None
 
 
-def parse_markers_from_text(text: str) -> list[dict]:
-    """Very lightweight parser for OCR text.
+# Lines that are clearly not markers (headers, metadata, patient info)
+_SKIP_LINE = re.compile(
+    r"(?:"
+    r"patient\s*name|doctor|hospital|laboratory|specimen|investigation|"
+    r"collection\s*date|reported\s*date|test\s+param|test\s+report|"
+    r"reference\s+range|medical\s+lab|scientist|"
+    r"\bsex\s*:|\bage\s*:|\bname\s*:|\bnumber\s*:|\bdate\s*:|"
+    r"^\s*results?\s*$|^\s*unit\s*$|www\.|\.com|@"
+    r")",
+    re.IGNORECASE,
+)
 
-    Real lab PDFs vary widely; this is a best-effort baseline.
-    We look for lines like: "Glucose 92 mg/dL".
+
+def _try_parse_line(line: str) -> dict | None:
+    """Try multiple regex patterns to extract a marker from a single line."""
+
+    # Pattern 1: Table with reference range
+    # e.g. "AST/GOT  35.5  0 - 46  u/l"  or  "TOTAL CHOLESTEROL  4.0  ≤5.20  mmol/l"
+    m = re.match(
+        r"^([A-Za-z][A-Za-z0-9\s\-\(\)\/\.]*?)"  # 1: marker name (lazy)
+        r"\s+"
+        r"(\d+(?:\.\d+)?)"  # 2: result value
+        r"\s+"
+        r"("  # 3: reference range
+        r"[<>≤≥]?\s*\d+(?:\.\d+)?\s*[-–—]\s*\d+(?:\.\d+)?"  # "0 - 46"
+        r"|[<>≤≥]\s*\d+(?:\.\d+)?"  # "≤5.20"
+        r")"
+        r"\s+"
+        r"([A-Za-z%][A-Za-z0-9%\/]*(?:\/[A-Za-z]+)?)"  # 4: unit
+        r"\s*$",
+        line,
+    )
+    if m:
+        return {
+            "name": m.group(1).strip(),
+            "value": _safe_float(m.group(2)),
+            "unit": m.group(4).strip(),
+            "ocr_reference": m.group(3).strip(),
+        }
+
+    # Pattern 2: Simple table — NAME  VALUE  [UNIT] (no reference range)
+    m = re.match(
+        r"^([A-Za-z][A-Za-z0-9\s\-\(\)\/]+?)"
+        r"\s+"
+        r"(\d+(?:\.\d+)?)"
+        r"\s*"
+        r"([A-Za-z%\/][A-Za-z0-9%\/]*)?\s*$",
+        line,
+    )
+    if m:
+        return {
+            "name": m.group(1).strip(),
+            "value": _safe_float(m.group(2)),
+            "unit": (m.group(3) or "").strip() or None,
+        }
+
+    # Pattern 3: Colon-separated — "pH: 5.0" or "Specific gravity: 1.030"
+    m = re.match(
+        r"^([A-Za-z][A-Za-z0-9\s\-\(\)\/]*?)"
+        r"\s*:\s*"
+        r"(\d+(?:\.\d+)?)"
+        r"\s*"
+        r"([A-Za-z%\/][A-Za-z0-9%\/]*)?\s*$",
+        line,
+    )
+    if m:
+        return {
+            "name": m.group(1).strip(),
+            "value": _safe_float(m.group(2)),
+            "unit": (m.group(3) or "").strip() or None,
+        }
+
+    return None
+
+
+def parse_markers_from_text(text: str) -> list[dict]:
+    """Robust parser for OCR text from lab reports.
+
+    Handles:
+    - Table format: NAME  VALUE  REF_LOW - REF_HIGH  UNIT
+    - Simple format: NAME  VALUE  UNIT
+    - Colon format:  NAME: VALUE  UNIT  (urinalysis etc.)
     """
     markers: list[dict] = []
     for raw_line in (text or "").splitlines():
         line = raw_line.strip()
-        if not line or len(line) < 4:
+        if not line or len(line) < 3:
             continue
-        m = re.match(r"^([A-Za-z][A-Za-z0-9\s\-\(\)\/]+?)\s+([0-9]+(?:\.[0-9]+)?)\s*([A-Za-z%\/]+)?\s*$", line)
-        if not m:
+        if _SKIP_LINE.search(line):
             continue
-        name = m.group(1).strip()
-        value = _safe_float(m.group(2))
-        unit = (m.group(3) or "").strip() or None
-        if value is None:
-            continue
-        markers.append({"name": name, "value": value, "unit": unit})
+
+        result = _try_parse_line(line)
+        if result and result.get("value") is not None:
+            markers.append(result)
 
     # De-dupe by name keeping first
-    seen = set()
-    out = []
+    seen: set[str] = set()
+    out: list[dict] = []
     for mk in markers:
         key = mk["name"].strip().lower()
         if key in seen:
@@ -87,22 +164,57 @@ async def _get_profile(db: AsyncSession, scan: Scan) -> dict | None:
 def _enrich_with_reference(markers: list[dict], profile: dict | None) -> list[dict]:
     enriched = []
     for m in markers:
-        low, high, default_unit = get_reference_range(m.get("name") or "", profile)
+        ref_low = ref_high = None
+
+        # Prefer reference range extracted from the OCR text (the lab's own ranges)
+        ocr_ref = m.get("ocr_reference")
+        if ocr_ref:
+            range_m = re.match(r"[<>≤≥]?\s*(\d+(?:\.\d+)?)\s*[-–—]\s*(\d+(?:\.\d+)?)", ocr_ref)
+            if range_m:
+                ref_low = _safe_float(range_m.group(1))
+                ref_high = _safe_float(range_m.group(2))
+            else:
+                bound_m = re.match(r"([<>≤≥])\s*(\d+(?:\.\d+)?)", ocr_ref)
+                if bound_m:
+                    val = _safe_float(bound_m.group(2))
+                    if bound_m.group(1) in ("<", "≤"):
+                        ref_low, ref_high = 0.0, val
+                    elif bound_m.group(1) in (">", "≥"):
+                        ref_low, ref_high = val, None
+
+        # Fall back to built-in reference ranges
+        builtin_low, builtin_high, default_unit = get_reference_range(m.get("name") or "", profile)
+        if ref_low is None and ref_high is None:
+            ref_low, ref_high = builtin_low, builtin_high
+
         unit = m.get("unit") or default_unit
         ref_range = None
-        if low is not None and high is not None:
-            ref_range = f"{low}-{high}"
+        if ref_low is not None and ref_high is not None:
+            ref_range = f"{ref_low}-{ref_high}"
         enriched.append(
             {
                 "name": m.get("name"),
                 "value": m.get("value"),
                 "unit": unit,
-                "reference_low": low,
-                "reference_high": high,
+                "reference_low": ref_low,
+                "reference_high": ref_high,
                 "reference_range": ref_range,
             }
         )
     return enriched
+
+
+def _pdf_to_page_pngs(pdf_bytes: bytes, max_pages: int = 5) -> list[bytes]:
+    """Convert PDF pages to PNG bytes list. Extracted once, reused for OCR + vision."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pdf_path = Path(tmpdir) / "input.pdf"
+        pdf_path.write_bytes(pdf_bytes)
+        subprocess.run(
+            ["pdftoppm", "-png", "-r", "300", str(pdf_path), str(Path(tmpdir) / "page")],
+            check=True, capture_output=True, timeout=60,
+        )
+        pages = sorted(Path(tmpdir).glob("page-*.png"))
+        return [p.read_bytes() for p in pages[:max_pages]]
 
 
 async def run_upload_pipeline(*, db: AsyncSession, scan_id: uuid.UUID, file_path: str, mime_type: str) -> None:
@@ -114,10 +226,34 @@ async def run_upload_pipeline(*, db: AsyncSession, scan_id: uuid.UUID, file_path
         with open(file_path, "rb") as f:
             content = f.read()
 
-        # OCR: Tesseract with preprocessing (PaddleOCR requires x86, this server is ARM64)
+        # Delete upload immediately — we only keep extracted data, not the report
+        _delete_upload(file_path)
+        scan.file_url = None
+
+        is_pdf = "pdf" in (mime_type or "").lower()
+
+        # For PDFs: convert pages to images ONCE (reused for both OCR and vision fallback)
+        page_pngs: list[bytes] = []
+        if is_pdf:
+            try:
+                page_pngs = _pdf_to_page_pngs(content)
+            except Exception as e:
+                logger.warning("PDF page extraction failed: %s", e)
+
+        # OCR
         text = ""
         try:
-            text = await TesseractOCR().extract_text(file_bytes=content, filename=file_path, mime_type=mime_type)
+            if page_pngs:
+                # OCR the pre-extracted page images (no redundant PDF conversion)
+                ocr = TesseractOCR()
+                texts = []
+                for png in page_pngs:
+                    page_text = await ocr.extract_text(file_bytes=png, mime_type="image/png")
+                    if page_text.strip():
+                        texts.append(page_text.strip())
+                text = "\n\n".join(texts)
+            else:
+                text = await TesseractOCR().extract_text(file_bytes=content, filename=file_path, mime_type=mime_type)
         except Exception as e:
             text = f"OCR_ERROR: {e}"
 
@@ -127,33 +263,36 @@ async def run_upload_pipeline(*, db: AsyncSession, scan_id: uuid.UUID, file_path
         profile = await _get_profile(db, scan)
         llm = get_llm_provider()
 
-        # If OCR extracted few/no markers, send image directly to LLM (vision)
         logger.info("OCR extracted %d markers from scan %s", len(extracted), scan.id)
 
         if len(extracted) < 2 and hasattr(llm, "interpret_image"):
             logger.info("Using VISION MODE for scan %s", scan.id)
             try:
-                interpreted = await llm.interpret_image(content, mime_type, profile)
+                # Reuse pre-extracted first page for PDFs; raw bytes for images
+                vision_bytes = page_pngs[0] if page_pngs else content
+                vision_mime = "image/png" if page_pngs else mime_type
+
+                interpreted = await llm.interpret_image(vision_bytes, vision_mime, profile)
                 scan.raw_ocr_text = (text or "") + "\n\n[VISION MODE: OCR extracted <2 markers, sent image to LLM directly]"
             except Exception as vision_err:
                 logger.error("Vision failed for scan %s: %s", scan.id, vision_err)
-                # Fall back to text-based interpretation
                 enriched = _enrich_with_reference(extracted, profile)
                 interpreted = await llm.interpret(enriched, profile)
                 scan.raw_ocr_text = (text or "") + f"\n\n[VISION FAILED: {vision_err}, fell back to text]"
         else:
             enriched = _enrich_with_reference(extracted, profile)
             interpreted = await llm.interpret(enriched, profile)
-        await _store_interpretation(db=db, scan=scan, interpreted=interpreted)
 
+        await _store_interpretation(db=db, scan=scan, interpreted=interpreted)
         scan.status = "completed"
+
+        # Free memory — report content no longer needed
+        del content
+        del page_pngs
     except Exception as e:
         scan.status = "failed"
         scan.raw_ocr_text = (scan.raw_ocr_text or "") + f"\n\nPIPELINE_ERROR: {e}"
     finally:
-        # Clean up: delete the uploaded file — extracted data is in the DB now
-        _delete_upload(file_path)
-        scan.file_url = None
         await db.commit()
 
 

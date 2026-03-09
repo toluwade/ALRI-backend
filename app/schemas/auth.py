@@ -23,6 +23,8 @@ class UserProfile(BaseModel):
     auth_provider: str | None = None
     age: int | None = None
     sex: str | None = None
+    weight_kg: float | None = None
+    height_cm: float | None = None
     credits: int
 
 
