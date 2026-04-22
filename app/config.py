@@ -51,6 +51,16 @@ class Settings(BaseSettings):
     PAYSTACK_PUBLIC_KEY: str | None = None
     PAYSTACK_WEBHOOK_SECRET: str | None = None
 
+    # Payments (Stripe)
+    STRIPE_SECRET_KEY: str | None = None
+    STRIPE_PUBLISHABLE_KEY: str | None = None
+    STRIPE_WEBHOOK_SECRET: str | None = None
+
+    # Payments (NOWPayments — USDT ERC20/TRC20)
+    NOWPAYMENTS_API_KEY: str | None = None
+    NOWPAYMENTS_IPN_SECRET: str | None = None
+    NOWPAYMENTS_API_URL: str = "https://api.nowpayments.io/v1"
+
     # WhatsApp
     WHATSAPP_TOKEN: str | None = None
     WHATSAPP_VERIFY_TOKEN: str | None = None

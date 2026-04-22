@@ -21,6 +21,10 @@ class User(Base):
 
     auth_provider: Mapped[str | None] = mapped_column(String(20))  # google | apple | phone
 
+    # Localization & currency preference (synced with Clerk publicMetadata)
+    preferred_locale: Mapped[str | None] = mapped_column(String(10))  # en | fr | de | nl
+    preferred_currency: Mapped[str | None] = mapped_column(String(3))  # NGN | USD | EUR | GBP
+
     age: Mapped[int | None] = mapped_column(Integer)
     sex: Mapped[str | None] = mapped_column(String(10))  # male | female
     weight_kg: Mapped[float | None] = mapped_column(Integer)  # weight in kg

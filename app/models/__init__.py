@@ -11,6 +11,7 @@ from app.models.notification import Notification
 from app.models.promo import PromoCode, PromoRedemption
 from app.models.tariff import Tariff
 from app.models.support_ticket import SupportTicket
+from app.models.payment import TopUpPackage, PackagePrice, Payment
 
 __all__ = [
     "User",
@@ -27,4 +28,7 @@ __all__ = [
     "PromoRedemption",
     "Tariff",
     "SupportTicket",
+    "TopUpPackage",
+    "PackagePrice",
+    "Payment",
 ]

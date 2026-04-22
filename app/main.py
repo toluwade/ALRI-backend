@@ -10,7 +10,7 @@ from sqlalchemy import delete
 
 from app.config import settings
 from app.database import AsyncSessionLocal, Base, engine
-from app.routers import admin, auth, health, notification, scan, scan_full, skin, support, user, voice, webhook, chat
+from app.routers import admin, auth, health, notification, payments, scan, scan_full, skin, support, user, voice, webhook, chat
 from app.services.scan_cleanup import cleanup_stale_scans
 from app.models.notification import Notification
 
@@ -107,6 +107,8 @@ def create_app() -> FastAPI:
     app.include_router(notification.router, prefix="/api/v1")
     app.include_router(support.router, prefix="/api/v1")
     app.include_router(admin.router, prefix="/api/v1")
+    app.include_router(payments.router, prefix="/api/v1")
+    app.include_router(payments.webhook_router)
 
     return app
 
