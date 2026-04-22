@@ -23,7 +23,7 @@ class User(Base):
 
     # Localization & currency preference (synced with Clerk publicMetadata)
     preferred_locale: Mapped[str | None] = mapped_column(String(10))  # en | fr | de | nl
-    preferred_currency: Mapped[str | None] = mapped_column(String(3))  # NGN | USD | EUR | GBP
+    preferred_currency: Mapped[str | None] = mapped_column(String(10))  # NGN | USD | EUR | GBP | USDT
 
     age: Mapped[int | None] = mapped_column(Integer)
     sex: Mapped[str | None] = mapped_column(String(10))  # male | female

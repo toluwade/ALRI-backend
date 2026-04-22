@@ -55,7 +55,7 @@ class PackagePrice(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     package_id: Mapped[int] = mapped_column(Integer, ForeignKey("topup_packages.id", ondelete="CASCADE"), index=True)
-    currency: Mapped[str] = mapped_column(String(3), index=True)  # NGN | USD | EUR | GBP | USDT
+    currency: Mapped[str] = mapped_column(String(10), index=True)  # NGN | USD | EUR | GBP | USDT
     amount_minor: Mapped[int] = mapped_column(Integer)  # price in smallest unit
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 

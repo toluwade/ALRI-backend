@@ -20,7 +20,7 @@ depends_on = None
 def upgrade() -> None:
     # User locale/currency prefs
     op.add_column("users", sa.Column("preferred_locale", sa.String(length=10), nullable=True))
-    op.add_column("users", sa.Column("preferred_currency", sa.String(length=3), nullable=True))
+    op.add_column("users", sa.Column("preferred_currency", sa.String(length=10), nullable=True))
 
     # TopUpPackage
     op.create_table(
@@ -48,7 +48,7 @@ def upgrade() -> None:
             sa.ForeignKey("topup_packages.id", ondelete="CASCADE"),
             nullable=False,
         ),
-        sa.Column("currency", sa.String(length=3), nullable=False),
+        sa.Column("currency", sa.String(length=10), nullable=False),
         sa.Column("amount_minor", sa.Integer(), nullable=False),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.UniqueConstraint("package_id", "currency", name="uq_package_currency"),
