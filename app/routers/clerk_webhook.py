@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/webhook", tags=["webhooks"])
 
-SUPPORTED_LOCALES = {"en", "fr", "de", "nl"}
+SUPPORTED_LOCALES = {"en", "fr", "de", "nl", "es"}
 SUPPORTED_CURRENCIES = {"NGN", "USD", "EUR", "GBP", "USDT"}
 
 

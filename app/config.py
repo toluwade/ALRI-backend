@@ -61,6 +61,9 @@ class Settings(BaseSettings):
     NOWPAYMENTS_IPN_SECRET: str | None = None
     NOWPAYMENTS_API_URL: str = "https://api.nowpayments.io/v1"
 
+    # Find Care (Google Places API New — server-side key)
+    GOOGLE_PLACES_API_KEY: str | None = None
+
     # WhatsApp
     WHATSAPP_TOKEN: str | None = None
     WHATSAPP_VERIFY_TOKEN: str | None = None
