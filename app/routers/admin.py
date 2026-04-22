@@ -14,10 +14,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db
 from app.middleware.auth import get_admin_user
 from app.models import CreditTransaction, PromoCode, PromoRedemption, Scan, SkinAnalysis, SupportTicket, User
+from app.models.payment import PackagePrice, Payment, TopUpPackage
 from app.models.tariff import Tariff
 from app.schemas.admin import (
     AdminNotificationItem,
     AdminNotificationsResponse,
+    AdminPackage,
+    AdminPackageCreate,
+    AdminPackageListResponse,
+    AdminPackagePrice,
+    AdminPackageUpdate,
+    AdminPriceUpsert,
     AdminScanItem,
     AdminScanListResponse,
     AdminSkinAnalysisItem,
@@ -944,3 +951,159 @@ async def admin_notifications(
         notifications=items[:50],
         total=len(items),
     )
+
+
+# ──────────────────────────── Packages & prices ────────────────────────────
+
+def _pkg_to_schema(pkg: TopUpPackage) -> AdminPackage:
+    return AdminPackage(
+        id=pkg.id,
+        code=pkg.code,
+        name=pkg.name,
+        description=pkg.description,
+        credits_granted=pkg.credits_granted,
+        display_order=pkg.display_order,
+        is_popular=pkg.is_popular,
+        is_active=pkg.is_active,
+        prices=[
+            AdminPackagePrice(
+                currency=p.currency,
+                amount_minor=p.amount_minor,
+                is_active=p.is_active,
+            )
+            for p in (pkg.prices or [])
+        ],
+    )
+
+
+@router.get("/packages", response_model=AdminPackageListResponse)
+async def admin_list_packages(
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    result = await db.execute(
+        select(TopUpPackage).order_by(TopUpPackage.display_order.asc(), TopUpPackage.id.asc())
+    )
+    packages = result.scalars().all()
+    return AdminPackageListResponse(packages=[_pkg_to_schema(p) for p in packages])
+
+
+@router.post("/packages", response_model=AdminPackage)
+async def admin_create_package(
+    body: AdminPackageCreate,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    existing = await db.execute(select(TopUpPackage).where(TopUpPackage.code == body.code))
+    if existing.scalar_one_or_none():
+        raise HTTPException(status_code=409, detail=f"Package code '{body.code}' already exists")
+
+    pkg = TopUpPackage(
+        code=body.code,
+        name=body.name,
+        description=body.description,
+        credits_granted=body.credits_granted,
+        display_order=body.display_order,
+        is_popular=body.is_popular,
+        is_active=body.is_active,
+    )
+    db.add(pkg)
+    await db.commit()
+    await db.refresh(pkg)
+    return _pkg_to_schema(pkg)
+
+
+@router.patch("/packages/{package_id}", response_model=AdminPackage)
+async def admin_update_package(
+    package_id: int,
+    body: AdminPackageUpdate,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    pkg = await db.get(TopUpPackage, package_id)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+
+    for field, value in body.model_dump(exclude_unset=True).items():
+        setattr(pkg, field, value)
+
+    await db.commit()
+    await db.refresh(pkg)
+    return _pkg_to_schema(pkg)
+
+
+@router.delete("/packages/{package_id}")
+async def admin_delete_package(
+    package_id: int,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Soft delete — set is_active=False. Preserves referential integrity with Payment."""
+    pkg = await db.get(TopUpPackage, package_id)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+    pkg.is_active = False
+    await db.commit()
+    return {"ok": True}
+
+
+@router.put("/packages/{package_id}/prices/{currency}", response_model=AdminPackage)
+async def admin_upsert_price(
+    package_id: int,
+    currency: str,
+    body: AdminPriceUpsert,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    currency = currency.upper()
+    if currency not in {"NGN", "USD", "EUR", "GBP", "USDT"}:
+        raise HTTPException(status_code=400, detail=f"Unsupported currency: {currency}")
+
+    pkg = await db.get(TopUpPackage, package_id)
+    if not pkg:
+        raise HTTPException(status_code=404, detail="Package not found")
+
+    result = await db.execute(
+        select(PackagePrice).where(
+            PackagePrice.package_id == package_id,
+            PackagePrice.currency == currency,
+        )
+    )
+    price = result.scalar_one_or_none()
+    if price:
+        price.amount_minor = body.amount_minor
+        price.is_active = body.is_active
+    else:
+        price = PackagePrice(
+            package_id=package_id,
+            currency=currency,
+            amount_minor=body.amount_minor,
+            is_active=body.is_active,
+        )
+        db.add(price)
+
+    await db.commit()
+    await db.refresh(pkg)
+    return _pkg_to_schema(pkg)
+
+
+@router.delete("/packages/{package_id}/prices/{currency}")
+async def admin_delete_price(
+    package_id: int,
+    currency: str,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db),
+):
+    currency = currency.upper()
+    result = await db.execute(
+        select(PackagePrice).where(
+            PackagePrice.package_id == package_id,
+            PackagePrice.currency == currency,
+        )
+    )
+    price = result.scalar_one_or_none()
+    if not price:
+        raise HTTPException(status_code=404, detail="Price not found")
+    await db.delete(price)
+    await db.commit()
+    return {"ok": True}

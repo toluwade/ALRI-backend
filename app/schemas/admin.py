@@ -263,3 +263,51 @@ class AdminTicketUpdate(BaseModel):
     status: str | None = None
     priority: str | None = None
     admin_response: str | None = None
+
+
+# ── Packages & pricing ──────────────────────────────────
+
+class AdminPackagePrice(BaseModel):
+    currency: str
+    amount_minor: int
+    is_active: bool = True
+
+
+class AdminPackage(BaseModel):
+    id: int
+    code: str
+    name: str
+    description: str | None = None
+    credits_granted: int
+    display_order: int = 0
+    is_popular: bool = False
+    is_active: bool = True
+    prices: list[AdminPackagePrice] = []
+
+
+class AdminPackageListResponse(BaseModel):
+    packages: list[AdminPackage]
+
+
+class AdminPackageCreate(BaseModel):
+    code: str
+    name: str
+    description: str | None = None
+    credits_granted: int = Field(..., ge=0)
+    display_order: int = 0
+    is_popular: bool = False
+    is_active: bool = True
+
+
+class AdminPackageUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    credits_granted: int | None = Field(None, ge=0)
+    display_order: int | None = None
+    is_popular: bool | None = None
+    is_active: bool | None = None
+
+
+class AdminPriceUpsert(BaseModel):
+    amount_minor: int = Field(..., ge=0)
+    is_active: bool = True
