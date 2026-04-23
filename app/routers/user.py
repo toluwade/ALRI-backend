@@ -490,3 +490,140 @@ async def redeem_promo(
         balance_after_kobo=int(current_user.credits),
         message=f"₦{amount // 100:,} has been added to your balance!",
     )
+
+
+# ────────────────────────────── Referrals ──────────────────────────────
+
+class ReferralLinkResponse(BaseModel):
+    code: str
+    url: str
+    bonus_kobo: int
+
+
+class ReferralListItem(BaseModel):
+    id: str
+    name: str | None
+    email: str | None
+    joined_at: str
+    status: str  # "pending" | "rewarded"
+    reward_kobo: int | None
+    first_topup_at: str | None
+
+
+class ReferralsResponse(BaseModel):
+    items: list[ReferralListItem]
+    total: int
+    page: int
+    per_page: int
+    stats: dict
+
+
+@router.get("/referral-link", response_model=ReferralLinkResponse)
+async def referral_link(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ReferralLinkResponse:
+    from app.services.referral import ensure_referral_code
+    from app.services.tariff_loader import get_tariffs
+
+    code = await ensure_referral_code(db, current_user)
+    tariffs = await get_tariffs(db)
+    return ReferralLinkResponse(
+        code=code,
+        url=f"{settings.FRONTEND_URL}/?ref={code}",
+        bonus_kobo=tariffs.referral_bonus_kobo,
+    )
+
+
+@router.get("/referrals", response_model=ReferralsResponse)
+async def list_referrals(
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=10, ge=1, le=100),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> ReferralsResponse:
+    """Paginated list of users who signed up via my referral code."""
+    from app.services.referral import referral_reason
+
+    base = select(User).where(User.referred_by == current_user.id)
+    total = (
+        await db.execute(
+            select(func.count()).select_from(User).where(User.referred_by == current_user.id)
+        )
+    ).scalar_one()
+
+    offset = (page - 1) * per_page
+    referees = (
+        await db.execute(
+            base.order_by(User.created_at.desc()).offset(offset).limit(per_page)
+        )
+    ).scalars().all()
+
+    items: list[ReferralListItem] = []
+    total_earned_kobo = 0
+    rewarded_count = 0
+
+    # Check reward status per referee — each referee has at most one row with
+    # the deterministic reason string.
+    for r in referees:
+        reason = referral_reason(r.id)
+        reward_row = (
+            await db.execute(
+                select(CreditTransaction).where(CreditTransaction.reason == reason).limit(1)
+            )
+        ).scalar_one_or_none()
+
+        status = "rewarded" if reward_row else "pending"
+        reward_kobo = int(reward_row.amount) if reward_row else None
+        first_topup_at = (
+            reward_row.created_at.isoformat()
+            if reward_row and hasattr(reward_row.created_at, "isoformat")
+            else None
+        )
+
+        items.append(
+            ReferralListItem(
+                id=str(r.id),
+                name=r.name,
+                email=r.email,
+                joined_at=r.created_at.isoformat() if hasattr(r.created_at, "isoformat") else str(r.created_at),
+                status=status,
+                reward_kobo=reward_kobo,
+                first_topup_at=first_topup_at,
+            )
+        )
+
+    # Stats need to look at ALL referees (not just current page) so we do a
+    # second lightweight count for rewarded.
+    all_referee_ids = [
+        r[0]
+        for r in (
+            await db.execute(
+                select(User.id).where(User.referred_by == current_user.id)
+            )
+        ).all()
+    ]
+    if all_referee_ids:
+        reasons = [f"referral_bonus:{rid}" for rid in all_referee_ids]
+        rewarded_rows = (
+            await db.execute(
+                select(func.count(), func.coalesce(func.sum(CreditTransaction.amount), 0))
+                .where(CreditTransaction.reason.in_(reasons))
+            )
+        ).first()
+        if rewarded_rows:
+            rewarded_count = int(rewarded_rows[0] or 0)
+            total_earned_kobo = int(rewarded_rows[1] or 0)
+
+    return ReferralsResponse(
+        items=items,
+        total=int(total),
+        page=page,
+        per_page=per_page,
+        stats={
+            "total_referrals": int(total),
+            "rewarded": rewarded_count,
+            "pending": int(total) - rewarded_count,
+            "total_earned_kobo": total_earned_kobo,
+        },
+    )

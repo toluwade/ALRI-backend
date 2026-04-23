@@ -207,6 +207,14 @@ async def _complete_payment(
         reason=f"{payment.provider}_success:{payment.provider_reference}",
     )
 
+    # Referral reward: idempotently credit the referrer once per referee,
+    # triggered by any successful top-up. Repeats are no-ops.
+    try:
+        from app.services.referral import award_referral_bonus_if_first_topup
+        await award_referral_bonus_if_first_topup(db, user)
+    except Exception as e:
+        logger.warning("Referral bonus check failed for user %s: %s", user.id, e)
+
 
 @webhook_router.post("/paystack")
 async def paystack_webhook(request: Request, db: AsyncSession = Depends(get_db)):

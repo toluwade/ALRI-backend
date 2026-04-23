@@ -42,6 +42,9 @@ class User(Base):
     referred_by: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True), ForeignKey("users.id"))
     referrer = relationship("User", remote_side=[id], lazy="selectin")
 
+    # Short shareable code — generated once on user creation, used in /?ref={code}
+    referral_code: Mapped[str | None] = mapped_column(String(12), unique=True, index=True)
+
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
