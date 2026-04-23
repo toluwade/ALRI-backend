@@ -12,6 +12,7 @@ from app.models.promo import PromoCode, PromoRedemption
 from app.models.tariff import Tariff
 from app.models.support_ticket import SupportTicket
 from app.models.payment import TopUpPackage, PackagePrice, Payment
+from app.models.medical_record import MedicalRecordShare
 
 __all__ = [
     "User",
@@ -31,4 +32,5 @@ __all__ = [
     "TopUpPackage",
     "PackagePrice",
     "Payment",
+    "MedicalRecordShare",
 ]
