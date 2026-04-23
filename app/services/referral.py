@@ -1,4 +1,9 @@
-"""Referral code generation + idempotent bonus crediting."""
+"""Referral code generation + idempotent bonus crediting.
+
+Reward policy (set 2026-04-23): credit the referrer the configured
+`tariffs.referral_bonus_kobo` the moment a referee signs up. Idempotent via a
+unique CreditTransaction reason string per referee.
+"""
 from __future__ import annotations
 
 import logging
@@ -16,20 +21,54 @@ from app.services.tariff_loader import get_tariffs
 logger = logging.getLogger(__name__)
 
 CODE_ALPHABET = string.ascii_uppercase + string.digits
-CODE_LEN = 6
+CODE_LEN_RANDOM = 6
+CODE_MAX_LEN = 12
 
 
-def _generate_code() -> str:
-    return "".join(random.choices(CODE_ALPHABET, k=CODE_LEN))
+def _sanitize_prefix(raw: str | None, max_len: int = 4) -> str:
+    if not raw:
+        return ""
+    clean = "".join(c for c in raw.upper() if c.isalnum())
+    return clean[:max_len]
+
+
+def _generate_code(first_name: str | None = None) -> str:
+    """Coin a code from the user's first name + a short random suffix.
+
+    "Tolu"    → "TOLU5K"
+    "Micheal" → "MICH9X"
+    None      → "A3K7XP"   (fallback: pure random)
+    """
+    prefix = _sanitize_prefix(first_name)
+    if prefix:
+        suffix_len = max(2, CODE_LEN_RANDOM - len(prefix))
+        return prefix + "".join(random.choices(CODE_ALPHABET, k=suffix_len))
+    return "".join(random.choices(CODE_ALPHABET, k=CODE_LEN_RANDOM))
+
+
+def _first_name_from(user: User) -> str | None:
+    if not user.name:
+        return None
+    parts = user.name.strip().split()
+    return parts[0] if parts else None
 
 
 async def ensure_referral_code(db: AsyncSession, user: User) -> str:
-    """Guarantee the user has a referral_code. Returns the current one."""
+    """Guarantee the user has a referral_code. Returns the current one.
+
+    For new users, seeds with their first name (e.g. TOLU5K). For users
+    who already have a code from an earlier backfill, keep it as-is so
+    existing shared links don't break.
+    """
     if user.referral_code:
         return user.referral_code
 
+    first_name = _first_name_from(user)
+
     for _ in range(10):
-        code = _generate_code()
+        code = _generate_code(first_name)
+        if len(code) > CODE_MAX_LEN:
+            continue
         existing = await db.execute(
             select(User.id).where(User.referral_code == code)
         )
@@ -46,7 +85,7 @@ async def resolve_referrer(db: AsyncSession, code: str | None) -> User | None:
     if not code:
         return None
     code = code.strip().upper()
-    if len(code) < 4 or len(code) > 12:
+    if len(code) < 4 or len(code) > CODE_MAX_LEN:
         return None
     result = await db.execute(select(User).where(User.referral_code == code))
     return result.scalar_one_or_none()
@@ -57,22 +96,21 @@ def referral_reason(referee_id: uuid.UUID) -> str:
     return f"referral_bonus:{referee_id}"
 
 
-async def award_referral_bonus_if_first_topup(
-    db: AsyncSession, referee: User
-) -> bool:
-    """Called after a referee completes a top-up.
+async def award_referral_bonus(db: AsyncSession, referee: User) -> bool:
+    """Credit the referrer — safe to call multiple times per referee.
 
-    Credits the referrer (if any) the configured referral_bonus_kobo. Idempotent:
-    the CreditTransaction row uses a fixed reason string per referee, so even if
-    called multiple times only the first successful insert credits the referrer.
-    Returns True if a credit was granted this call.
+    Idempotent: the first successful insert on reason=referral_bonus:{referee_id}
+    wins; later calls short-circuit. Returns True if this call did the credit.
+    Also prevents self-referral.
     """
     if not referee.referred_by:
+        return False
+    if referee.referred_by == referee.id:
+        logger.warning("Blocked self-referral for user %s", referee.id)
         return False
 
     reason = referral_reason(referee.id)
 
-    # Idempotency check — skip if we've already awarded for this referee.
     already = await db.execute(
         select(CreditTransaction.id).where(CreditTransaction.reason == reason).limit(1)
     )

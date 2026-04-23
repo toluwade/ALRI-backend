@@ -14,7 +14,7 @@ class Tariff(Base):
 
     # All amounts in kobo (₦1 = 100 kobo)
     signup_bonus_kobo: Mapped[int] = mapped_column(Integer, default=500_000)          # ₦5,000
-    referral_bonus_kobo: Mapped[int] = mapped_column(Integer, default=100_000)        # ₦1,000
+    referral_bonus_kobo: Mapped[int] = mapped_column(Integer, default=50_000)         # ₦500
     cost_per_chat_kobo: Mapped[int] = mapped_column(Integer, default=5_000)           # ₦50
     cost_per_file_upload_kobo: Mapped[int] = mapped_column(Integer, default=5_000)    # ₦50
     cost_per_transcription_kobo: Mapped[int] = mapped_column(Integer, default=10_000) # ₦100

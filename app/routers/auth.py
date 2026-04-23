@@ -200,6 +200,13 @@ async def clerk_sign_in(request: Request, db: AsyncSession = Depends(get_db)) ->
                 await email_svc.send_welcome(email, name)
             except Exception as e:
                 logger.warning("Failed to send welcome email: %s", e)
+
+        # Credit the referrer immediately on signup (idempotent, self-refs blocked).
+        try:
+            from app.services.referral import award_referral_bonus
+            await award_referral_bonus(db, user)
+        except Exception as e:
+            logger.warning("Failed to award referral bonus for %s: %s", user.id, e)
     else:
         user.name = name or user.name
         user.avatar_url = avatar or user.avatar_url
